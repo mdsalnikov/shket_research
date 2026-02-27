@@ -50,7 +50,7 @@ HELP_TEXT = (
     "/context — информация о контексте (сообщения, токены)\n"
     "/clear — очистить контекст сессии\n"
     "/tasks — список запущенных задач\n"
-    "/logs \[N] — показать последние N записей лога (по умолчанию 30)\n"
+    r"/logs \[N] — показать последние N записей лога (по умолчанию 30)" + "\n"
     "/exportlogs — скачать полный файл лога\n"
     "/panic — экстренная остановка\n\n"
     "Отправьте любой текстовое сообщение, чтобы дать агенту задачу.\n"
@@ -239,7 +239,7 @@ async def context_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     for msg in stats["last_messages"]:
         role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(msg["role"], "📄")
-        preview = msg["content_preview"].replace("_", "\_").replace("*", "\*")
+        preview = msg["content_preview"].replace("_", r"\_").replace("*", r"\*")
         text += f"\n{role_emoji} _{preview}_"
     
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -294,28 +294,22 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     username = user.username if user else None
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
-    """Show human-readable activity log."""
+
     n = 30
- 
-    args = context.args
-    if args:
+    if context.args:
         try:
-            n = int(args[0])
+            n = int(context.args[0])
         except ValueError:
             pass
 
-    entries = get_activity_log_tail(n)
-    if not entries:
+    text = get_activity_log_tail(n)
+    if not text or "empty" in text.lower():
         await update.message.reply_text("Log is empty.")
         return
-
-    lines = [f"{e['time']} {e['action']}: {e['detail']}" for e in entries]
-    text = "\n".join(lines)
     if len(text) > 4000:
         text = text[-4000:]
     await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
@@ -328,13 +322,10 @@ async def export_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
-    """Send the full log file."""
+
     try:
-        await update.message.reply_document(
-            document=open(LOG_FILE, "rb"),
-            filename="agent.log",
-        )
+        with open(LOG_FILE, "rb") as f:
+            await update.message.reply_document(document=f, filename="agent.log")
     except FileNotFoundError:
         await update.message.reply_text(f"Log file not found: {LOG_FILE}")
 
@@ -346,8 +337,7 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
-    """Emergency stop: terminate all agent processes."""
+
     # Note: This doesn't actually kill processes yet, just logs and notifies
     await update.message.reply_text(
         "🚨 *Emergency stop requested*\n\n"
@@ -399,8 +389,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _active_tasks[task_id] = task_info
 
     # Log start
-    log_task_start(task_id, text, username)
-    log_user_message(chat_id, text, username)
+    log_task_start(task_id, text)
+    log_user_message(chat_id, text)
 
     logger.info(f"Task #{task_id} started by {username}: {text[:60]}... (provider={provider})")
 
@@ -409,7 +399,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"⏳ Processing (task #{task_id}, provider={provider})...",
     )
 
-    # Run task
+    task_start = time.time()
     try:
         from agent.core.runner import run_task_with_session
 
@@ -420,14 +410,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             user_id=user_id,
             provider=provider,
         )
+        duration = time.time() - task_start
         await update.message.reply_text(result)
         log_agent_response(chat_id, result)
-        log_task_end(task_id, "success")
+        log_task_end(task_id, True, duration)
 
     except Exception as e:
+        duration = time.time() - task_start
         logger.exception(f"Task #{task_id} failed")
         await update.message.reply_text(f"❌ Task failed: {e}")
-        log_task_end(task_id, "failed", str(e))
+        log_task_end(task_id, False, duration, str(e))
 
     finally:
         _active_tasks.pop(task_id, None)
