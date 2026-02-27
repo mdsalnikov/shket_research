@@ -211,15 +211,17 @@ Logs are written to **both**:
 
 ## Safety & Self-Preservation
 
-The agent may receive instructions to modify or rewrite itself. In such cases it **must**:
+When the agent modifies its own code it **must**:
 
-1. Create a full backup of the current codebase before making changes
-2. Apply changes in an isolated copy
-3. Validate that the new version runs correctly (start a new instance, run sanity checks)
-4. Only replace the running instance after successful validation
-5. Never kill the current instance before the new one is confirmed healthy
+1. Create a full backup before any changes (backup_codebase; keeps last 5 backups)
+2. Work on a branch for non-trivial changes; keep edits small and atomic
+3. Run tests and run the agent in a fresh subprocess to validate the new code
+4. Only commit/push after all checks pass; for larger changes open a PR and let the user review and merge
+5. On failure: use **restore_from_backup(backup_dir)** (see list_backups), then fix and re-run tests
+6. Never kill the current instance before the new code is validated in a subprocess
 
-The `/panic` command exists to interrupt a runaway or stuck agent at any time.
+Tools **list_backups** and **restore_from_backup** make rollback reliable without manual file copying.
+The `/panic` command stops a runaway or stuck agent at any time.
 
 ---
 
