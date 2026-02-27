@@ -9,6 +9,8 @@ import os
 
 import pytest
 
+from agent.config import PROJECT_ROOT
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TEST_MODEL = os.getenv("AGENT_TEST_MODEL", "openai/gpt-oss-120b")
 
@@ -42,7 +44,7 @@ async def test_shell_command():
 @pytest.mark.asyncio
 async def test_write_and_run_script():
     """Agent should write a Python script that prints HELLO_SHKET, run it, report output."""
-    script_path = "/workspace/tmp_test_script.py"
+    script_path = os.path.join(PROJECT_ROOT, "tmp_test_script.py")
     try:
         agent = _build_agent()
         result = await agent.run(
@@ -61,7 +63,7 @@ async def test_write_and_run_script():
 @pytest.mark.asyncio
 async def test_filesystem_read_write():
     """Agent should write 'MAGIC_TOKEN_12345' to a file, read it back, and confirm."""
-    test_file = "/workspace/tmp_test_token.txt"
+    test_file = os.path.join(PROJECT_ROOT, "tmp_test_token.txt")
     try:
         agent = _build_agent()
         result = await agent.run(
@@ -104,7 +106,7 @@ async def test_git_status():
 async def test_multi_step_research():
     """Agent should: 1) run `uname -r` to get kernel version, 2) write it to a file,
     3) read the file back, 4) include the kernel version in the answer."""
-    report_file = "/workspace/tmp_kernel_report.txt"
+    report_file = os.path.join(PROJECT_ROOT, "tmp_kernel_report.txt")
     try:
         agent = _build_agent()
         result = await agent.run(

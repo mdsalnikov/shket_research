@@ -132,11 +132,28 @@ Any text message (not a command) is treated as a task for the agent. Tasks run a
 |---|---|
 | `OPENROUTER_API_KEY` | API key for [OpenRouter](https://openrouter.ai) — used during development |
 | `TG_BOT_KEY` | Telegram Bot API token (obtained via [@BotFather](https://t.me/BotFather)) |
+| `GH_TOKEN` | GitHub token for `git push` and `gh` CLI (optional) |
 
 ```bash
 cp .env.example .env
 # fill in OPENROUTER_API_KEY and TG_BOT_KEY
 ```
+
+### GitHub (git push, gh CLI)
+
+For self-modification with git push and `gh` commands, put your GitHub token in `GHTOKEN.txt` in the project root, or set `GH_TOKEN` in `.env`:
+
+```
+# GHTOKEN.txt (one line: the token)
+github_pat_xxxx...
+```
+
+Or in `.env`:
+```
+GH_TOKEN=github_pat_xxxx...
+```
+
+Run `gh auth setup-git` once so git uses gh for credentials. The agent uses `run_gh` for gh CLI and `git_push` (which passes GH_TOKEN for auth).
 
 ---
 

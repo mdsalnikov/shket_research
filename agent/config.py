@@ -8,7 +8,8 @@ load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TG_BOT_KEY = os.getenv("TG_BOT_KEY", "")
 DEFAULT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
-PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+# Project root: directory containing agent/ package (works from any cwd)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")
 
 

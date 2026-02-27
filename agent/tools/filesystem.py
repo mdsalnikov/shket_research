@@ -3,14 +3,15 @@ from __future__ import annotations
 import logging
 import os
 
-logger = logging.getLogger(__name__)
+from agent.config import PROJECT_ROOT
 
-BASE_DIR = "/workspace"
+logger = logging.getLogger(__name__)
 
 
 def _safe_path(path: str) -> str:
-    resolved = os.path.realpath(os.path.join(BASE_DIR, path))
-    if not resolved.startswith(BASE_DIR):
+    base = os.path.realpath(PROJECT_ROOT)
+    resolved = os.path.realpath(os.path.join(base, path))
+    if not resolved.startswith(base):
         raise ValueError(f"Path escapes workspace: {path}")
     return resolved
 

@@ -4,19 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+
+from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
-WORKSPACE = "/workspace"
 TIMEOUT = 30
 
 
-async def _run_git(args: list[str]) -> tuple[int, str]:
-    cmd = ["git", "-C", WORKSPACE] + args
+def _gh_token_env() -> dict:
+    """Return env with GH_TOKEN from GHTOKEN.txt or env if available."""
+    env = dict(os.environ)
+    token = env.get("GH_TOKEN")
+    if not token:
+        for path in ("GHTOKEN.txt", ".gh_token"):
+            full = os.path.join(PROJECT_ROOT, path)
+            if os.path.exists(full):
+                with open(full) as f:
+                    token = f.read().strip()
+                break
+    if token:
+        env["GH_TOKEN"] = token
+    return env
+
+
+async def _run_git(args: list[str], use_gh_token: bool = False) -> tuple[int, str]:
+    cmd = ["git", "-C", PROJECT_ROOT] + args
+    env = _gh_token_env() if use_gh_token else None
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=env,
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
     out = stdout.decode(errors="replace").strip()
@@ -62,14 +82,14 @@ async def git_commit(message: str) -> str:
 
 
 async def git_push(branch: str | None = None) -> str:
-    """Push commits to remote. Uses current branch if branch not specified.
+    """Push commits to remote. Uses GH_TOKEN from GHTOKEN.txt or env for auth.
 
     Args:
         branch: Branch to push. Default: current branch.
     """
     logger.info("Tool git_push: %s", branch or "current")
     args = ["push", "origin", branch] if branch else ["push"]
-    code, out = await _run_git(args)
+    code, out = await _run_git(args, use_gh_token=True)
     if code != 0:
         return f"error (exit {code}): {out}"
     return "Pushed successfully"

@@ -21,7 +21,8 @@ Tools:
 - backup_codebase: create full backup before self-modification
 - run_tests: run pytest in subprocess (default: tests/test_cli.py)
 - run_agent_subprocess: run agent with a task in a fresh subprocess (loads code from disk)
-- git_status / git_add / git_commit / git_push: version control
+- git_status / git_add / git_commit / git_push: version control (git_push uses GH_TOKEN)
+- run_gh: run gh CLI (pr list, repo view, etc.). Uses GH_TOKEN from GHTOKEN.txt or env.
 - request_restart: request process restart to load new code (TG bot only)
 
 Rules:
@@ -43,6 +44,7 @@ Self-modification (adding capabilities, rewriting your own code):
 12. In your final report, summarize what was done, test results, and commit hash.
 13. When running as TG bot, call request_restart() at the end so the bot restarts with new code.
 14. Never kill the current process before validation. Always test in subprocess first.
+15. GitHub: GHTOKEN.txt or GH_TOKEN env. Use run_gh for gh CLI.
 """
 
 
@@ -61,6 +63,7 @@ def build_agent(
     api_key: str | None = None,
 ) -> Agent:
     from agent.tools.filesystem import list_dir, read_file, write_file
+    from agent.tools.gh import run_gh
     from agent.tools.git import git_add, git_commit, git_push, git_status
     from agent.tools.restart import request_restart
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
@@ -85,6 +88,7 @@ def build_agent(
         git_add,
         git_commit,
         git_push,
+        run_gh,
         request_restart,
     ]
     return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)
