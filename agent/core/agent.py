@@ -72,6 +72,7 @@ def build_agent(
         git_push,
         git_status,
     )
+    from agent.tools.gh import run_gh
     from agent.tools.restart import request_restart
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
     from agent.tools.shell import run_shell
