@@ -1,15 +1,8 @@
-"""Deterministic tests for agent capabilities using GPT-OSS-120B via OpenRouter.
+"""Agent capability tests via OpenRouter (GPT-OSS-120B or Qwen).
 
-These tests verify the agent can:
-1. Execute shell commands and return correct output
-2. Write a Python script to a file and execute it
-3. Perform web search and synthesize results
-4. Read/write files via filesystem tools
-5. Solve a multi-step task (deep research pattern)
-
-Each test checks that the agent's final answer contains expected deterministic markers.
-Marked with pytest.mark.agent so they can be run separately:
-    pytest -m agent -v
+Tests verify: shell, filesystem, web search, multi-step tasks.
+Run with: pytest -m agent -v
+Use Qwen: AGENT_TEST_MODEL=qwen/qwen3.5-122b-a10b pytest -m agent -v
 """
 
 import os
@@ -17,6 +10,7 @@ import os
 import pytest
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+TEST_MODEL = os.getenv("AGENT_TEST_MODEL", "openai/gpt-oss-120b")
 
 pytestmark = pytest.mark.agent
 
@@ -29,7 +23,7 @@ skip_no_key = pytest.mark.skipif(
 def _build_agent():
     from agent.core.agent import build_agent
 
-    return build_agent(model_name="openai/gpt-oss-120b")
+    return build_agent(model_name=TEST_MODEL)
 
 
 @skip_no_key

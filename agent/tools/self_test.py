@@ -14,6 +14,32 @@ WORKSPACE = "/workspace"
 VENV_PYTHON = os.path.join(WORKSPACE, ".venv", "bin", "python")
 TIMEOUT_TESTS = 120
 TIMEOUT_AGENT = 90
+MAX_OUTPUT_LEN = 6000
+
+_BACKUP_IGNORE = (".venv", "__pycache__", ".git")
+
+
+def _ignore_backup(_d: str, names: list[str]) -> list[str]:
+    return [n for n in names if n in _BACKUP_IGNORE or n.startswith(".backup_")]
+
+
+def _python() -> str:
+    return VENV_PYTHON if os.path.exists(VENV_PYTHON) else "python"
+
+
+async def _run_subprocess(cmd: list[str], timeout: int, env: dict | None = None) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=WORKSPACE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env or os.environ,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    out = stdout.decode(errors="replace").strip()
+    if len(out) > MAX_OUTPUT_LEN:
+        out = out[:MAX_OUTPUT_LEN] + "\n… (truncated)"
+    return proc.returncode if proc.returncode is not None else -1, out
 
 
 async def backup_codebase() -> str:
@@ -24,19 +50,11 @@ async def backup_codebase() -> str:
     logger.info("Tool backup_codebase")
     ts = time.strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(WORKSPACE, f".backup_{ts}")
-    def _ignore(_d: str, names: list[str]) -> list[str]:
-        skip = (".venv", "__pycache__", ".git")
-        return [n for n in names if n in skip or n.startswith(".backup_")]
-
     try:
-        shutil.copytree(WORKSPACE, dest, ignore=_ignore, dirs_exist_ok=False)
+        shutil.copytree(WORKSPACE, dest, ignore=_ignore_backup, dirs_exist_ok=False)
         return f"Backup created at {dest}"
     except Exception as e:
         return f"error: {e}"
-
-
-def _python() -> str:
-    return VENV_PYTHON if os.path.exists(VENV_PYTHON) else "python"
 
 
 async def run_tests(test_path: str = "tests/test_cli.py") -> str:
@@ -48,17 +66,8 @@ async def run_tests(test_path: str = "tests/test_cli.py") -> str:
     logger.info("Tool run_tests: %s", test_path)
     cmd = [_python(), "-m", "pytest", test_path, "-v", "--tb=short"]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=WORKSPACE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT_TESTS)
-        out = stdout.decode(errors="replace").strip()
-        if len(out) > 6000:
-            out = out[:6000] + "\n… (truncated)"
-        return f"exit_code={proc.returncode}\n{out}"
+        code, out = await _run_subprocess(cmd, TIMEOUT_TESTS)
+        return f"exit_code={code}\n{out}"
     except asyncio.TimeoutError:
         return "error: pytest timed out after 120s"
     except Exception as e:
@@ -77,18 +86,8 @@ async def run_agent_subprocess(task: str) -> str:
     logger.info("Tool run_agent_subprocess: %s", task[:80])
     cmd = [_python(), "-m", "agent", "run", task]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=WORKSPACE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ},
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT_AGENT)
-        out = stdout.decode(errors="replace").strip()
-        if len(out) > 6000:
-            out = out[:6000] + "\n… (truncated)"
-        return f"exit_code={proc.returncode}\n{out}"
+        code, out = await _run_subprocess(cmd, TIMEOUT_AGENT)
+        return f"exit_code={code}\n{out}"
     except asyncio.TimeoutError:
         return "error: agent subprocess timed out after 90s"
     except Exception as e:
