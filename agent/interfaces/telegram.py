@@ -27,6 +27,7 @@ BOT_COMMANDS = [
     BotCommand("start", "Запустить бота / показать приветствие"),
     BotCommand("help", "Список доступных команд"),
     BotCommand("status", "Показать статус агента и время работы"),
+    BotCommand("context", "Показать информацию о контексте сессии"),
     BotCommand("tasks", "Список запущенных задач"),
     BotCommand("logs", "Показать последние N записей лога (по умолчанию 30)"),
     BotCommand("exportlogs", "Скачать полный файл лога"),
@@ -39,6 +40,7 @@ HELP_TEXT = (
     "/start — приветственное сообщение\n"
     "/help — это справка\n"
     "/status — статус агента и время работы\n"
+    "/context — информация о контексте (сообщения, токены)\n"
     "/tasks — список запущенных задач\n"
     "/logs \[N] — показать последние N записей лога (по умолчанию 30)\n"
     "/exportlogs — скачать полный файл лога\n"
@@ -136,6 +138,51 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"📋 Active tasks: {n}"
     )
 
+
+
+
+async def context_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current session context info."""
+    from agent.session_globals import get_db
+    
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
+    chat_id = update.effective_chat.id
+    db = await get_db()
+    
+    session_id = await db.get_or_create_session(chat_id)
+    stats = await db.get_session_stats(session_id, include_last_messages=3)
+    
+    if "error" in stats:
+        await update.message.reply_text(f"❌ {stats['error']}")
+        return
+    
+    # Format uptime
+    uptime_h = int(stats["uptime_seconds"] // 3600)
+    uptime_m = int((stats["uptime_seconds"] % 3600) // 60)
+    idle_m = int(stats["idle_seconds"] // 60)
+    
+    text = (
+        f"📊 *Context Info*\n\n"
+        f"📝 Messages: *{stats['message_count']}*\n"
+        f"🔤 Estimated tokens: *{stats['estimated_tokens']:,}*\n"
+        f"📏 Total chars: *{stats['total_chars']:,}*\n\n"
+        f"⏱ Session age: {uptime_h}h {uptime_m}m\n"
+        f"💤 Idle: {idle_m}m ago\n\n"
+        f"_Last {len(stats['last_messages'])} messages:_\n"
+    )
+    
+    for msg in stats["last_messages"]:
+        role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(msg["role"], "📄")
+        preview = msg["content_preview"].replace("_", "\_").replace("*", "\*")
+        text += f"\n{role_emoji} _{preview}_"
+    
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -329,6 +376,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("context", context_cmd))
     app.add_handler(CommandHandler("tasks", tasks_cmd))
     app.add_handler(CommandHandler("logs", logs_cmd))
     app.add_handler(CommandHandler("exportlogs", exportlogs_cmd))
