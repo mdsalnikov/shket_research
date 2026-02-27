@@ -1,3 +1,5 @@
+"""Telegram bot interface with session support."""
+
 import asyncio
 import logging
 import os
@@ -15,6 +17,7 @@ from agent.activity_log import (
     get_activity_log_tail,
 )
 from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging, VERSION
+from agent.session_globals import close_db
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,8 @@ HELP_TEXT = (
     "Несколько задач могут выполняться одновременно — бот остаётся отзывчивым.\n\n"
     "*Доступные инструменты:*\n"
     "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
-    "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart"
+    "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart\n"
+    "🧠 Memory (remember/recall)"
     f"\n\nВерсия: {VERSION}"
 )
 
@@ -54,6 +58,8 @@ class TaskInfo:
     task_text: str
     chat_id: int
     started: float = field(default_factory=time.time)
+    username: str | None = None
+    user_id: int | None = None
 
 
 _active_tasks: dict[int, TaskInfo] = {}
@@ -128,16 +134,28 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os._exit(1)
 
 
-async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
-    """Run agent task and log everything."""
+async def _run_agent_task(
+    task_id: int,
+    text: str,
+    chat_id: int,
+    bot,
+    username: str | None = None,
+    user_id: int | None = None,
+) -> None:
+    """Run agent task with session support and log everything."""
     task_start = time.time()
     log_task_start(task_id, text)
-    
+
     reply = None
     error = None
     try:
-        from agent.core.runner import run_with_retry
-        reply = await run_with_retry(text)
+        from agent.core.runner import run_task_with_session
+        reply = await run_task_with_session(
+            text,
+            chat_id=chat_id,
+            username=username,
+            user_id=user_id,
+        )
     except Exception as e:
         logger.exception("Agent error for task #%d", task_id)
         error = str(e)
@@ -149,7 +167,7 @@ async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
 
     if len(reply) > 4096:
         reply = reply[:4090] + "\n…"
-    
+
     await bot.send_message(chat_id=chat_id, text=reply)
     log_agent_response(chat_id, reply)
 
@@ -157,8 +175,9 @@ async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
 
     if restart.RESTART_REQUESTED:
         logger.info("Restart requested by agent, exec new process")
+        # Close database before restart
+        await close_db()
         import sys
-
         os.execv(sys.executable, [sys.executable, "-m", "agent", "bot"])
 
 
@@ -166,18 +185,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     global _task_counter
     text = update.message.text
     chat_id = update.effective_chat.id
-    logger.info("Task from %s: %s", update.effective_user.id, text)
+    user = update.effective_user
+    logger.info("Task from %s: %s", user.id, text)
 
     # Log user message
     log_user_message(chat_id, text)
 
     _task_counter += 1
     task_id = _task_counter
-    _active_tasks[task_id] = TaskInfo(task_text=text, chat_id=chat_id)
+    _active_tasks[task_id] = TaskInfo(
+        task_text=text,
+        chat_id=chat_id,
+        username=user.username if user else None,
+        user_id=user.id if user else None,
+    )
 
     await update.message.reply_text(f"⏳ Task #{task_id} accepted. Working on it…")
 
-    asyncio.create_task(_run_agent_task(task_id, text, chat_id, context.bot))
+    asyncio.create_task(
+        _run_agent_task(
+            task_id,
+            text,
+            chat_id,
+            context.bot,
+            username=user.username if user else None,
+            user_id=user.id if user else None,
+        )
+    )
 
 
 async def post_init(app) -> None:

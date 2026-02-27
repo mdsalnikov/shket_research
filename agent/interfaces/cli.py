@@ -1,9 +1,12 @@
+"""CLI interface with session support."""
+
 import argparse
 import asyncio
 import logging
 from pathlib import Path
 
 from agent.config import LOG_FILE, setup_logging
+from agent.session_globals import close_db, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +16,35 @@ VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknow
 
 
 async def _run_task(task: str) -> None:
+    """Run a task with session support (CLI mode uses chat_id=0)."""
     from agent.core.runner import run_with_retry
 
-    output = await run_with_retry(task)
-    print(output)
+    try:
+        output = await run_with_retry(task, chat_id=0)
+        print(output)
+    finally:
+        await close_db()
+
+
+async def _show_memory_summary() -> None:
+    """Show memory summary."""
+    try:
+        db = await get_db()
+        l0 = await db.get_l0_overview()
+
+        if not l0:
+            print("No memories stored.")
+            return
+
+        print("=== Memory Summary (L0) ===\n")
+        for category, summaries in l0.items():
+            print(f"[{category}]")
+            for summary in summaries:
+                print(f"  - {summary}")
+            print()
+
+    finally:
+        await close_db()
 
 
 def _show_logs(n: int) -> None:
@@ -44,6 +72,7 @@ def main():
     sub.add_parser("bot", help="Запустить Telegram‑бот (long‑polling)")
     sub.add_parser("status", help="Показать статус агента")
     sub.add_parser("version", help="Показать версию агента")
+    sub.add_parser("memory", help="Показать сводку памяти")
 
     logs_p = sub.add_parser("logs", help="Показать последние записи лога")
     logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
@@ -62,14 +91,16 @@ def main():
         print(f"Agent status: idle (v{VERSION})")
         tools = (
             "shell, filesystem, web_search, todo, backup, run_tests, "
-            "run_agent_subprocess, git, request_restart"
+            "run_agent_subprocess, git, request_restart, memory"
         )
         print(f"Available tools: {tools}")
+        print("Session support: SQLite (data/sessions.db)")
     elif args.command == "version":
         print(f"Shket Research Agent v{VERSION}")
+    elif args.command == "memory":
+        asyncio.run(_show_memory_summary())
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
-
         run_bot()
     else:
         parser.print_help()
