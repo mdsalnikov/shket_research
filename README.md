@@ -111,9 +111,10 @@ Start the bot with `python -m agent bot`, then interact via Telegram.
 | `/start` | Start the bot / show welcome message |
 | `/help` | List available commands and tools |
 | `/status` | Show agent status and uptime |
+| `/tasks` | List currently running tasks |
 | `/panic` | 🛑 Emergency halt — immediately kill all agent processes |
 
-Any text message (not a command) is treated as a task for the agent.
+Any text message (not a command) is treated as a task for the agent. Tasks run asynchronously — the bot stays responsive while tasks execute, and you can send multiple tasks in parallel.
 
 > Commands are registered with Telegram via `set_my_commands` — they appear in the bot's command menu automatically.
 
