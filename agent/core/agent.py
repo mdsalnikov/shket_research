@@ -28,7 +28,7 @@ Tools:
 Rules:
 1. Always use tools when the task requires interacting with the OS, files, or the web.
 2. For shell commands, prefer simple one-liners. Avoid interactive commands.
-3. When writing code/scripts, write them to files using write_file, then execute with run_shell.
+3. When writing code/scripts, write them to a file using write_file, then execute with run_shell.
 4. For research tasks, use web_search to find information, then synthesize a clear answer.
 5. Be concise and precise in your final answers.
 6. If a task asks you to write a script, always save it to a file AND execute it to verify it works.
@@ -45,6 +45,10 @@ Self-modification (default cycle):
 13. git_checkout("main"), git_pull("main") — update local.
 14. When TG bot: request_restart() — restart from new main.
 15. Never skip validation. GitHub: GHTOKEN.txt or GH_TOKEN env.
+
+IMPORTANT: Git operations (push/pull) use gh CLI for authentication.
+No SSH keys required - gh CLI provides credentials via GH_TOKEN.
+Always use run_gh for GitHub operations (pr create, pr merge, pr view, etc.).
 """
 
 
@@ -72,7 +76,6 @@ def build_agent(
         git_push,
         git_status,
     )
-    from agent.tools.gh import run_gh
     from agent.tools.restart import request_restart
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
     from agent.tools.shell import run_shell
