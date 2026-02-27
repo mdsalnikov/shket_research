@@ -218,25 +218,27 @@ class SessionDB:
 
     async def get_model_message_history(self, session_id: int) -> str | None:
         """Get stored pydantic-ai message history (JSON) for this session."""
-        try:
-            cursor = await self._db.execute(
-                "SELECT message_history_json FROM sessions WHERE id = ?",
-                (session_id,),
-            )
-            row = await cursor.fetchone()
-            if row is None:
+        async with self._lock:
+            try:
+                cursor = await self._db.execute(
+                    "SELECT message_history_json FROM sessions WHERE id = ?",
+                    (session_id,),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                return row["message_history_json"]
+            except (sqlite3.OperationalError, KeyError, IndexError):
                 return None
-            return row["message_history_json"]
-        except (sqlite3.OperationalError, KeyError, IndexError):
-            return None
 
     async def set_model_message_history(self, session_id: int, json_str: str) -> None:
         """Store pydantic-ai message history (JSON) for this session."""
-        await self._db.execute(
-            "UPDATE sessions SET message_history_json = ?, updated_at = ? WHERE id = ?",
-            (json_str, time.time(), session_id),
-        )
-        await self._db.commit()
+        async with self._lock:
+            await self._db.execute(
+                "UPDATE sessions SET message_history_json = ?, updated_at = ? WHERE id = ?",
+                (json_str, time.time(), session_id),
+            )
+            await self._db.commit()
 
     def _session_key(
         self, 
@@ -297,11 +299,12 @@ class SessionDB:
 
     async def get_session(self, session_id: int) -> dict | None:
         """Get session metadata by ID."""
-        cursor = await self._db.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        async with self._lock:
+            cursor = await self._db.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
     async def add_message(
         self,
@@ -366,29 +369,30 @@ class SessionDB:
             List of SessionMessage objects (oldest first)
 
         """
-        cursor = await self._db.execute(
-            """SELECT * FROM messages 
-               WHERE session_id = ? 
-               ORDER BY timestamp ASC 
-               LIMIT ? OFFSET ?""",
-            (session_id, limit, offset),
-        )
-        rows = await cursor.fetchall()
+        async with self._lock:
+            cursor = await self._db.execute(
+                """SELECT * FROM messages 
+                   WHERE session_id = ? 
+                   ORDER BY timestamp ASC 
+                   LIMIT ? OFFSET ?""",
+                (session_id, limit, offset),
+            )
+            rows = await cursor.fetchall()
 
-        messages = []
-        for row in rows:
-            tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
-            metadata = json.loads(row["metadata"]) if row["metadata"] else None
-            messages.append(SessionMessage(
-                role=row["role"],
-                content=row["content"],
-                timestamp=row["timestamp"],
-                tool_name=row["tool_name"],
-                tool_params=tool_params,
-                tool_result=row["tool_result"],
-                metadata=metadata,
-            ))
-        return messages
+            messages = []
+            for row in rows:
+                tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
+                metadata = json.loads(row["metadata"]) if row["metadata"] else None
+                messages.append(SessionMessage(
+                    role=row["role"],
+                    content=row["content"],
+                    timestamp=row["timestamp"],
+                    tool_name=row["tool_name"],
+                    tool_params=tool_params,
+                    tool_result=row["tool_result"],
+                    metadata=metadata,
+                ))
+            return messages
 
     async def get_recent_messages(
         self, 
@@ -408,30 +412,31 @@ class SessionDB:
             List of SessionMessage objects (newest first)
 
         """
-        cursor = await self._db.execute(
-            """SELECT * FROM messages 
-               WHERE session_id = ? 
-               ORDER BY timestamp DESC 
-               LIMIT ?""",
-            (session_id, limit),
-        )
-        rows = await cursor.fetchall()
+        async with self._lock:
+            cursor = await self._db.execute(
+                """SELECT * FROM messages 
+                   WHERE session_id = ? 
+                   ORDER BY timestamp DESC 
+                   LIMIT ?""",
+                (session_id, limit),
+            )
+            rows = await cursor.fetchall()
 
-        messages = []
-        for row in rows:
-            tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
-            metadata = json.loads(row["metadata"]) if row["metadata"] else None
-            messages.append(SessionMessage(
-                role=row["role"],
-                content=row["content"],
-                timestamp=row["timestamp"],
-                tool_name=row["tool_name"],
-                tool_params=tool_params,
-                tool_result=row["tool_result"],
-                metadata=metadata,
-            ))
-        # Reverse to get chronological order
-        return list(reversed(messages))
+            messages = []
+            for row in rows:
+                tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
+                metadata = json.loads(row["metadata"]) if row["metadata"] else None
+                messages.append(SessionMessage(
+                    role=row["role"],
+                    content=row["content"],
+                    timestamp=row["timestamp"],
+                    tool_name=row["tool_name"],
+                    tool_params=tool_params,
+                    tool_result=row["tool_result"],
+                    metadata=metadata,
+                ))
+            # Reverse to get chronological order
+            return list(reversed(messages))
 
     async def get_conversation_history(
         self, 

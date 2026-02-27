@@ -102,6 +102,15 @@ class TaskInfo:
 
 _active_tasks: dict[int, TaskInfo] = {}
 _task_counter = 0
+_chat_locks: dict[int, asyncio.Lock] = {}
+_chat_queued_count: dict[int, int] = {}
+
+
+def _get_chat_lock(chat_id: int) -> asyncio.Lock:
+    """Return per-chat lock so tasks in the same chat run one after another."""
+    if chat_id not in _chat_locks:
+        _chat_locks[chat_id] = asyncio.Lock()
+    return _chat_locks[chat_id]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,14 +151,15 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     uptime = int(time.time() - _start_time)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
-    n = len(_active_tasks)
-    
+    running = len(_active_tasks)
+    queued = sum(_chat_queued_count.values())
+
     provider_status = f"📡 Provider: *{_current_provider}*\n"
     await update.message.reply_text(
         f"✅ Agent is running\n"
         f"⏱ Uptime: {h}h {m}m {s}s\n"
         f"{provider_status}"
-        f"📋 Active tasks: {n}",
+        f"📋 Active: {running} running, {queued} queued",
         parse_mode="Markdown"
     )
 
@@ -279,7 +289,9 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
     
-    if not _active_tasks:
+    running = len(_active_tasks)
+    queued = sum(_chat_queued_count.values())
+    if running == 0 and queued == 0:
         await update.message.reply_text("No active tasks.")
         return
     lines = []
@@ -288,7 +300,11 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         preview = info.task_text[:60] + ("…" if len(info.task_text) > 60 else "")
         provider_tag = f"[{info.provider}] " if info.provider else ""
         lines.append(f"#{tid} ({elapsed}s) — {provider_tag}{preview}")
-    await update.message.reply_text("📋 Active tasks:\n" + "\n".join(lines))
+    for cid, count in sorted(_chat_queued_count.items()):
+        if count > 0:
+            lines.append(f"Chat {cid}: {count} queued")
+    header = f"📋 Running: {running}, queued: {queued}\n"
+    await update.message.reply_text(header + "\n".join(lines))
 
 
 async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -345,17 +361,17 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="Markdown"
     )
     
-    # Clear active tasks
-    global _active_tasks
+    # Clear active tasks (running coroutines continue; display only)
+    global _active_tasks, _chat_queued_count
     n = len(_active_tasks)
     _active_tasks = {}
-    
+    _chat_queued_count = {}
     logger.warning(f"PANIC: Cleared {n} active tasks by user {username}")
     await update.message.reply_text(f"✅ Cleared {n} active tasks.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages as tasks."""
+    """Handle incoming text messages as tasks. Same-chat tasks run one after another."""
     global _task_counter, _current_provider
 
     user = update.effective_user
@@ -372,57 +388,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     chat_id = update.effective_chat.id
-    _task_counter += 1
-    task_id = _task_counter
-
-    # Use current provider
-    provider = _current_provider
-
-    # Create task info
-    task_info = TaskInfo(
-        task_text=text,
-        chat_id=chat_id,
-        username=username,
-        user_id=user_id,
-        provider=provider,
-    )
-    _active_tasks[task_id] = task_info
-
-    # Log start
-    log_task_start(task_id, text)
-    log_user_message(chat_id, text)
-
-    logger.info(f"Task #{task_id} started by {username}: {text[:60]}... (provider={provider})")
-
-    # Acknowledge
-    await update.message.reply_text(
-        f"⏳ Processing (task #{task_id}, provider={provider})...",
-    )
-
-    task_start = time.time()
+    lock = _get_chat_lock(chat_id)
+    _chat_queued_count[chat_id] = _chat_queued_count.get(chat_id, 0) + 1
+    got_lock = False
     try:
-        from agent.core.runner import run_task_with_session
+        async with lock:
+            got_lock = True
+            _chat_queued_count[chat_id] = max(0, _chat_queued_count.get(chat_id, 1) - 1)
 
-        result = await run_task_with_session(
-            text,
-            chat_id=chat_id,
-            username=username,
-            user_id=user_id,
-            provider=provider,
-        )
-        duration = time.time() - task_start
-        await update.message.reply_text(result)
-        log_agent_response(chat_id, result)
-        log_task_end(task_id, True, duration)
+            _task_counter += 1
+            task_id = _task_counter
+            provider = _current_provider
+            task_info = TaskInfo(
+                task_text=text,
+                chat_id=chat_id,
+                username=username,
+                user_id=user_id,
+                provider=provider,
+            )
+            _active_tasks[task_id] = task_info
 
-    except Exception as e:
-        duration = time.time() - task_start
-        logger.exception(f"Task #{task_id} failed")
-        await update.message.reply_text(f"❌ Task failed: {e}")
-        log_task_end(task_id, False, duration, str(e))
+            log_task_start(task_id, text)
+            log_user_message(chat_id, text)
+            logger.info(f"Task #{task_id} started by {username}: {text[:60]}... (provider={provider})")
 
+            await update.message.reply_text(
+                f"⏳ Processing (task #{task_id}, provider={provider})...",
+            )
+
+            task_start = time.time()
+            try:
+                from agent.core.runner import run_task_with_session
+
+                result = await run_task_with_session(
+                    text,
+                    chat_id=chat_id,
+                    username=username,
+                    user_id=user_id,
+                    provider=provider,
+                )
+                duration = time.time() - task_start
+                await update.message.reply_text(result)
+                log_agent_response(chat_id, result)
+                log_task_end(task_id, True, duration)
+
+            except Exception as e:
+                duration = time.time() - task_start
+                logger.exception(f"Task #{task_id} failed")
+                await update.message.reply_text(f"❌ Task failed: {e}")
+                log_task_end(task_id, False, duration, str(e))
+
+            finally:
+                _active_tasks.pop(task_id, None)
     finally:
-        _active_tasks.pop(task_id, None)
+        if not got_lock:
+            _chat_queued_count[chat_id] = max(0, _chat_queued_count.get(chat_id, 1) - 1)
 
 
 def run_bot() -> None:
@@ -433,6 +453,7 @@ def run_bot() -> None:
     app = (
         ApplicationBuilder()
         .token(TG_BOT_KEY)
+        .concurrent_updates(True)
         .build()
     )
 
