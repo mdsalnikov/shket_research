@@ -43,6 +43,7 @@ async def _run_task(task: str, provider: str | None = None) -> None:
     Args:
         task: Task description
         provider: 'vllm' or 'openrouter' (default: from config)
+    
     """
     if task.strip().lower() == "status":
         print(_builtin_status())
@@ -58,63 +59,141 @@ async def _run_task(task: str, provider: str | None = None) -> None:
         await close_db()
 
 async def _show_memory_summary() -> None:
-    """Display a summary of the memory store."""
-    from agent.memory import MemoryStore
-    store = await MemoryStore.get_instance()
-    # Print the count of memory entries per category.
-    summary = store.summary()
-    for category, count in summary.items():
-        print(f"{category}: {count} entries")
-
-def _show_logs(num: int = 50) -> None:
-    """Print the last `num` lines from the log file."""
+    """Show memory summary."""
     try:
-        with open(LOG_FILE, "r") as f:
+        db = await get_db()
+        l0 = await db.get_l0_overview()
+
+        if not l0:
+            print("No memories stored.")
+            return
+
+        print("=== Memory Summary (L0) ===\n")
+        for category, summaries in l0.items():
+            print(f"[{category}]")
+            for summary in summaries:
+                print(f"  - {summary}")
+            print()
+
+    finally:
+        await close_db()
+
+
+async def _clear_context() -> None:
+    """Clear session context (CLI uses chat_id=0)."""
+    try:
+        db = await get_db()
+        session_id = await db.get_or_create_session(0)  # CLI uses chat_id=0
+        await db.clear_session(session_id)
+        print("✅ Context cleared successfully!")
+        print("   Session metadata preserved, messages deleted.")
+    finally:
+        await close_db()
+
+
+async def _show_context() -> None:
+    """Show current session context info (CLI uses chat_id=0)."""
+    from datetime import datetime
+    
+    try:
+        db = await get_db()
+        session_id = await db.get_or_create_session(0)  # CLI uses chat_id=0
+        stats = await db.get_session_stats(session_id, include_last_messages=5)
+        
+        if "error" in stats:
+            print(f"Error: {stats['error']}")
+            return
+        
+        print("=== Session Context ===\n")
+        print(f"📝 Messages: {stats['message_count']}")
+        print(f"🔤 Estimated tokens: {stats['estimated_tokens']:,}")
+        print(f"📏 Total chars: {stats['total_chars']:,}")
+        print(f"\n⏱ Session created: {stats['created_at']}")
+        print(f"🕐 Last activity: {stats['updated_at']}")
+        
+        uptime_h = int(stats["uptime_seconds"] // 3600)
+        uptime_m = int((stats["uptime_seconds"] % 3600) // 60)
+        print(f"   Session age: {uptime_h}h {uptime_m}m")
+        
+        idle_m = int(stats["idle_seconds"] // 60)
+        print(f"   Idle: {idle_m}m ago")
+        
+        if stats["last_messages"]:
+            print(f"\n--- Last {len(stats['last_messages'])} messages ---")
+            for msg in stats["last_messages"]:
+                role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(msg["role"], "📄")
+                print(f"\n{role_emoji} [{msg['role']}] ({msg['chars']} chars)")
+                print(f"   {msg['content_preview']}")
+
+    finally:
+        await close_db()
+
+
+def _show_logs(n: int) -> None:
+    try:
+        with open(LOG_FILE) as f:
             lines = f.readlines()
-            for line in lines[-num:]:
-                print(line, end="")
     except FileNotFoundError:
-        print("Log file not found.")
+        print(f"Log file not found: {LOG_FILE}")
+        return
+    tail = lines[-n:] if len(lines) > n else lines
+    print(f"--- last {len(tail)} of {len(lines)} log entries ---")
+    print("".join(tail), end="")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Shket Research Agent bot")
-    subparsers = parser.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser(
+        prog="python -m agent",
+        description=f"Shket Research Agent v{VERSION} — автономный LLM‑агент для Ubuntu‑сервера",
+    )
+    sub = parser.add_subparsers(dest="command")
 
-    # Sub‑command: run
-    parser_run = subparsers.add_parser("run", help="Run a task")
-    parser_run.add_argument("task", type=str, help="Task description")
-    parser_run.add_argument(
-        "--provider",
-        type=str,
+    run_p = sub.add_parser("run", help="Выполнить задачу")
+    run_p.add_argument("task", help="Описание задачи на естественном языке")
+    run_p.add_argument(
+        "--provider", "-p",
         choices=["vllm", "openrouter"],
-        help="Provider to use (default from config)",
+        default=None,
+        help=f"LLM provider (default: {PROVIDER_DEFAULT}). Use 'vllm' for local, 'openrouter' for cloud.",
     )
 
-    # Sub‑command: status
-    subparsers.add_parser("status", help="Show agent status")
+    sub.add_parser("bot", help="Запустить Telegram‑бот (long‑polling)")
+    sub.add_parser("status", help="Показать статус агента")
+    sub.add_parser("version", help="Показать версию агента")
+    sub.add_parser("memory", help="Показать сводку памяти")
+    sub.add_parser("context", help="Показать информацию о контексте сессии")
+    sub.add_parser("clear-context", help="Очистить контекст сессии (удалить сообщения)")
 
-    # Sub‑command: logs
-    parser_logs = subparsers.add_parser("logs", help="Show recent logs")
-    parser_logs.add_argument("-n", type=int, default=50, help="Number of lines to show")
-
-    # Sub‑command: memory
-    subparsers.add_parser("memory", help="Show memory summary")
+    logs_p = sub.add_parser("logs", help="Показать последние записи лога")
+    logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
 
     args = parser.parse_args()
-
-    # Setup logging according to config.
-    setup_logging()
 
     if args.command == "logs":
         _show_logs(args.n)
         return
 
+    setup_logging()
+
     if args.command == "run":
         asyncio.run(_run_task(args.task, args.provider))
     elif args.command == "status":
         print(_builtin_status())
+    elif args.command == "version":
+        print(f"Shket Research Agent v{VERSION}")
     elif args.command == "memory":
         asyncio.run(_show_memory_summary())
+    elif args.command == "context":
+        asyncio.run(_show_context())
+    elif args.command == "clear-context":
+        asyncio.run(_clear_context())
+    elif args.command == "bot":
+        from agent.interfaces.telegram import run_bot
+        run_bot()
+    else:
+        parser.print_help()
+        print(f"\nVersion: {VERSION}")
+        print(f"Default provider: {PROVIDER_DEFAULT}")
 
 if __name__ == "__main__":
     main()
