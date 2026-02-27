@@ -1,4 +1,4 @@
-"""Agent task runner with session support and self-healing retries.
+'''Agent task runner with session support and self-healing retries.
 
 This module provides the main entry points for running agent tasks
 with SQLite session persistence (OpenClaw-inspired architecture) and
@@ -9,7 +9,7 @@ Self-healing features:
 - Context compression for overflow errors
 - Graceful fallback generation from partial results
 - Smart retry counting (non-retryable errors don't waste attempts)
-"""
+''' 
 
 from __future__ import annotations
 
@@ -50,11 +50,7 @@ async def run_with_retry(
         provider: 'vllm' or 'openrouter' (default: from config).
 
     Returns:
-        Agent output. On failure: meaningful fallback with partial results.
-        
-    Example:
-        result = await run_with_retry("list files in /tmp", chat_id=12345)
-        
+        Agent output as a string. On failure: meaningful fallback with partial results.
     """
     from agent.core.agent import build_session_agent
 
@@ -66,10 +62,10 @@ async def run_with_retry(
 
     # Log user message to session
     await deps.add_user_message(task)
-    
+
     # Build agent
     agent = build_session_agent(provider=provider)
-    
+
     # Create self-healing runner
     healing_runner = SelfHealingRunner(max_retries=n)
 
@@ -82,18 +78,23 @@ async def run_with_retry(
             max_retries=n,
         )
         
-        if success:
-            logger.info("Task completed successfully")
+        # Determine output string safely
+        if isinstance(result, str):
+            output_str = result
         else:
-            logger.warning(f"Task failed after {n} attempts, returned fallback")
-        
-        return result
+            output_str = getattr(result, "output", str(result))
 
-    except Exception as e:
-        # Last-resort error handling
-        logger.error(f"Unexpected error in runner: {e}")
+        # Record the assistant's reply in the session history for continuity.
+        if success:
+            await deps.add_assistant_message(output_str)
+            logger.info("Task completed successfully")
+            return output_str
+        else:
+            await deps.add_assistant_message(output_str)
+            return output_str
         
-        # Generate fallback response
+    except Exception as e:
+        logger.error(f"Unexpected error in runner: {e}")
         fallback = FallbackHandler()
         return fallback.generate_from_error(e, attempt_count=1)
 
@@ -116,25 +117,6 @@ async def run_task_with_session(
     - Conversation history is persisted in SQLite
     - Memory (L0/L1/L2) is available across sessions
     - User context is preserved for personalization
-
-    Args:
-        task: Task description
-        chat_id: Telegram chat ID for session isolation
-        username: Optional user display name
-        user_id: Optional Telegram user ID
-        session_scope: Session scope (main/per-peer/per-channel-peer)
-        provider: 'vllm' or 'openrouter' (default: from config)
-
-    Returns:
-        Agent response
-        
-    Example:
-        response = await run_task_with_session(
-            "what files are in /tmp?",
-            chat_id=12345,
-            username="john",
-        )
-        
     """
     deps = await AgentDeps.create(
         chat_id=chat_id,
@@ -151,15 +133,6 @@ async def run_simple_task(task: str, model_name: str | None = None, provider: st
     
     Useful for one-off tasks that don't need session isolation
     or memory persistence.
-    
-    Args:
-        task: Task description
-        model_name: Optional model override
-        provider: 'vllm' or 'openrouter' (default: from config)
-        
-    Returns:
-        Agent response
-        
     """
     from agent.core.agent import build_agent
 
@@ -170,8 +143,6 @@ async def run_simple_task(task: str, model_name: str | None = None, provider: st
         return result.output
     except Exception as e:
         logger.error(f"Simple task failed: {e}")
-        
-        # Generate fallback response
         fallback = FallbackHandler()
         return fallback.generate_from_error(e, attempt_count=1)
 
@@ -181,11 +152,9 @@ async def cleanup():
     
     Closes the database connection and any other resources.
     Should be called when the application is shutting down.
-    
     """
     await close_db()
     logger.info("Runner cleanup completed")
-
 
 # ============ Legacy Support ============
 
@@ -200,17 +169,6 @@ async def run_with_retry_legacy(
     
     This is the original implementation that counts all errors
     against retry limit, even non-retryable ones.
-    
-    Args:
-        task: Initial task description.
-        max_retries: Override config (default: MAX_RETRIES from config).
-        chat_id: Chat ID for session isolation (default: 0 for CLI).
-        deps: Pre-created dependencies (optional, will create if not provided).
-        provider: 'vllm' or 'openrouter' (default: from config).
-
-    Returns:
-        Agent output. On final failure: error summary with attempt count and last error.
-        
     """
     from agent.core.agent import build_session_agent
 
@@ -219,11 +177,9 @@ async def run_with_retry_legacy(
     last_error: Exception | None = None
     agent = build_session_agent(provider=provider)
 
-    # Create dependencies if not provided
     if deps is None:
         deps = await AgentDeps.create(chat_id=chat_id)
 
-    # Log user message to session
     await deps.add_user_message(task)
 
     try:
@@ -231,19 +187,14 @@ async def run_with_retry_legacy(
             try:
                 logger.info(f"Running task (attempt {attempt + 1}/{n})")
                 result = await agent.run(current_task, deps=deps)
-
-                # Log assistant response
                 await deps.add_assistant_message(result.output)
-
-                logger.info(f"Task completed successfully")
+                logger.info("Task completed successfully")
                 return result.output
-
             except Exception as e:
                 last_error = e
                 logger.warning(f"Attempt {attempt + 1}/{n} failed: {e}")
                 deps.last_error = str(e)
                 deps.retry_count = attempt + 1
-
                 if attempt < n - 1:
                     current_task = (
                         f"{task}\n\n"
@@ -252,15 +203,11 @@ async def run_with_retry_legacy(
                     )
                 else:
                     break
-
         msg = (
             f"Не удалось выполнить задачу после {n} попыток.\n\n"
             f"Последняя ошибка: {last_error}"
         )
         logger.error(f"Task failed after {n} attempts: {last_error}")
         return msg
-
     finally:
-        # Don't close DB here - it's a global singleton
-        # DB will be closed on application shutdown
         pass
