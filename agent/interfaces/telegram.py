@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
@@ -15,6 +17,7 @@ BOT_COMMANDS = [
     BotCommand("start", "Start the bot / show welcome message"),
     BotCommand("help", "List available commands"),
     BotCommand("status", "Show agent status and uptime"),
+    BotCommand("tasks", "List running tasks"),
     BotCommand("panic", "Emergency halt — kill all agent processes"),
 ]
 
@@ -24,14 +27,27 @@ HELP_TEXT = (
     "/start — welcome message\n"
     "/help — this help\n"
     "/status — agent status & uptime\n"
+    "/tasks — list running tasks\n"
     "/panic — emergency halt\n\n"
-    "Send any text message to give the agent a task.\n\n"
+    "Send any text message to give the agent a task.\n"
+    "Multiple tasks run concurrently — the bot stays responsive.\n\n"
     "*Available tools:*\n"
     "🐚 Shell — execute OS commands\n"
     "🌐 Web search — search the internet\n"
     "📁 Filesystem — read / write / list files\n"
     "🔍 Deep Research — multi-step web research"
 )
+
+
+@dataclass
+class TaskInfo:
+    task_text: str
+    chat_id: int
+    started: float = field(default_factory=time.time)
+
+
+_active_tasks: dict[int, TaskInfo] = {}
+_task_counter = 0
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -44,13 +60,28 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uptime = int(time.time() - _start_time)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
+    n = len(_active_tasks)
     await update.message.reply_text(
-        f"✅ Agent is running\n⏱ Uptime: {h}h {m}m {s}s"
+        f"✅ Agent is running\n"
+        f"⏱ Uptime: {h}h {m}m {s}s\n"
+        f"📋 Active tasks: {n}"
     )
+
+
+async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _active_tasks:
+        await update.message.reply_text("No active tasks.")
+        return
+    lines = []
+    for tid, info in _active_tasks.items():
+        elapsed = int(time.time() - info.started)
+        preview = info.task_text[:60] + ("…" if len(info.task_text) > 60 else "")
+        lines.append(f"#{tid} ({elapsed}s) — {preview}")
+    await update.message.reply_text("📋 Active tasks:\n" + "\n".join(lines))
 
 
 async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -59,11 +90,7 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     os._exit(1)
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text
-    logger.info("Task from %s: %s", update.effective_user.id, text)
-    await update.message.reply_text("⏳ Working on it…")
-
+async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
     try:
         from agent.core.agent import build_agent
 
@@ -71,12 +98,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         result = await agent.run(text)
         reply = result.output
     except Exception as e:
-        logger.exception("Agent error")
+        logger.exception("Agent error for task #%d", task_id)
         reply = f"❌ Error: {e}"
+    finally:
+        _active_tasks.pop(task_id, None)
 
     if len(reply) > 4096:
         reply = reply[:4090] + "\n…"
-    await update.message.reply_text(reply)
+    await bot.send_message(chat_id=chat_id, text=reply)
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _task_counter
+    text = update.message.text
+    chat_id = update.effective_chat.id
+    logger.info("Task from %s: %s", update.effective_user.id, text)
+
+    _task_counter += 1
+    task_id = _task_counter
+    _active_tasks[task_id] = TaskInfo(task_text=text, chat_id=chat_id)
+
+    await update.message.reply_text(f"⏳ Task #{task_id} accepted. Working on it…")
+
+    asyncio.create_task(_run_agent_task(task_id, text, chat_id, context.bot))
 
 
 async def post_init(app) -> None:
@@ -94,10 +138,17 @@ def run_bot() -> None:
         level=logging.INFO,
     )
 
-    app = ApplicationBuilder().token(token).post_init(post_init).build()
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .concurrent_updates(True)
+        .post_init(post_init)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("tasks", tasks_cmd))
     app.add_handler(CommandHandler("panic", panic))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
