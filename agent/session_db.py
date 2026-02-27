@@ -79,6 +79,12 @@ class SessionDB:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
+        
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        # This prevents "readonly database" errors when multiple processes access the DB
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for locks
+        
         await self._create_tables()
         self._initialized = True
         logger.info("SessionDB initialized at %s", self.db_path)
