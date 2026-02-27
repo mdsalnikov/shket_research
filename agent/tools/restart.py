@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from agent.activity_log import log_tool_call
+
 logger = logging.getLogger(__name__)
 
 RESTART_REQUESTED = False
@@ -17,6 +19,8 @@ async def request_restart() -> str:
     CLI runs are one-shot; no restart needed.
     """
     global RESTART_REQUESTED
-    logger.info("Tool request_restart")
-    RESTART_REQUESTED = True
-    return "Restart requested. Bot will restart with new code after this response."
+    with log_tool_call("request_restart") as tool_log:
+        logger.info("Tool request_restart")
+        RESTART_REQUESTED = True
+        tool_log.log_result("restart scheduled")
+        return "Restart requested. Bot will restart with new code after this response."

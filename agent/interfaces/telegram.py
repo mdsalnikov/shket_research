@@ -7,6 +7,13 @@ from dataclasses import dataclass, field
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
+from agent.activity_log import (
+    log_user_message,
+    log_agent_response,
+    log_task_start,
+    log_task_end,
+    get_activity_log_tail,
+)
 from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging, VERSION
 
 logger = logging.getLogger(__name__)
@@ -88,6 +95,7 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show human-readable activity log."""
     n = 30
     if context.args:
         try:
@@ -95,30 +103,22 @@ async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except ValueError:
             pass
 
-    try:
-        with open(LOG_FILE) as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        await update.message.reply_text("Log file not found.")
-        return
-
-    tail = lines[-n:] if len(lines) > n else lines
-    header = f"📜 Last {len(tail)} of {len(lines)} log entries:\n\n"
-    text = header + "".join(tail)
+    text = get_activity_log_tail(n)
     if len(text) > 4096:
         text = text[:4090] + "\n…"
     await update.message.reply_text(text)
 
 
 async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export both activity log and technical log."""
     if not os.path.exists(LOG_FILE):
         await update.message.reply_text("Log file not found.")
         return
     with open(LOG_FILE, "rb") as f:
         await update.message.reply_document(
             document=f,
-            filename="agent.log",
-            caption="📜 Full agent log",
+            filename="agent_technical.log",
+            caption="📜 Technical log (activity log is shown via /logs command)",
         )
 
 
@@ -129,19 +129,29 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
+    """Run agent task and log everything."""
+    task_start = time.time()
+    log_task_start(task_id, text)
+    
+    reply = None
+    error = None
     try:
         from agent.core.runner import run_with_retry
-
         reply = await run_with_retry(text)
     except Exception as e:
         logger.exception("Agent error for task #%d", task_id)
+        error = str(e)
         reply = f"❌ Error: {e}"
     finally:
         _active_tasks.pop(task_id, None)
+        duration = time.time() - task_start
+        log_task_end(task_id, error is None, duration, error)
 
     if len(reply) > 4096:
         reply = reply[:4090] + "\n…"
+    
     await bot.send_message(chat_id=chat_id, text=reply)
+    log_agent_response(chat_id, reply)
 
     from agent.tools import restart
 
@@ -157,6 +167,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = update.message.text
     chat_id = update.effective_chat.id
     logger.info("Task from %s: %s", update.effective_user.id, text)
+
+    # Log user message
+    log_user_message(chat_id, text)
 
     _task_counter += 1
     task_id = _task_counter

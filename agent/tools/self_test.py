@@ -8,6 +8,7 @@ import os
 import shutil
 import time
 
+from agent.activity_log import log_tool_call
 from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -50,22 +51,26 @@ async def backup_codebase() -> str:
     Use this BEFORE any changes to agent code. Backup is saved to .backup_YYYYMMDD_HHMMSS/.
     Runs with 60s timeout to avoid hanging.
     """
-    logger.info("Tool backup_codebase")
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(PROJECT_ROOT, f".backup_{ts}")
+    with log_tool_call("backup_codebase") as tool_log:
+        logger.info("Tool backup_codebase")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(PROJECT_ROOT, f".backup_{ts}")
 
-    def _do_backup() -> None:
-        shutil.copytree(PROJECT_ROOT, dest, ignore=_ignore_backup, dirs_exist_ok=False)
+        def _do_backup() -> None:
+            shutil.copytree(PROJECT_ROOT, dest, ignore=_ignore_backup, dirs_exist_ok=False)
 
-    try:
-        await asyncio.wait_for(asyncio.to_thread(_do_backup), timeout=TIMEOUT_BACKUP)
-        return f"Backup created at {dest}"
-    except asyncio.TimeoutError:
-        if os.path.exists(dest):
-            shutil.rmtree(dest, ignore_errors=True)
-        return f"error: backup timed out after {TIMEOUT_BACKUP}s"
-    except Exception as e:
-        return f"error: {e}"
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_do_backup), timeout=TIMEOUT_BACKUP)
+            tool_log.log_result(f"backup at {dest}")
+            return f"Backup created at {dest}"
+        except asyncio.TimeoutError:
+            if os.path.exists(dest):
+                shutil.rmtree(dest, ignore_errors=True)
+            tool_log.log_result("timeout")
+            return f"error: backup timed out after {TIMEOUT_BACKUP}s"
+        except Exception as e:
+            tool_log.log_result(f"error: {e}")
+            return f"error: {e}"
 
 
 async def run_tests(test_path: str = "tests/test_cli.py") -> str:
@@ -74,15 +79,19 @@ async def run_tests(test_path: str = "tests/test_cli.py") -> str:
     Args:
         test_path: Test file or directory. Default: tests/test_cli.py (unit tests).
     """
-    logger.info("Tool run_tests: %s", test_path)
-    cmd = [_python(), "-m", "pytest", test_path, "-v", "--tb=short"]
-    try:
-        code, out = await _run_subprocess(cmd, TIMEOUT_TESTS)
-        return f"exit_code={code}\n{out}"
-    except asyncio.TimeoutError:
-        return "error: pytest timed out after 120s"
-    except Exception as e:
-        return f"error: {e}"
+    with log_tool_call("run_tests", test_path) as tool_log:
+        logger.info("Tool run_tests: %s", test_path)
+        cmd = [_python(), "-m", "pytest", test_path, "-v", "--tb=short"]
+        try:
+            code, out = await _run_subprocess(cmd, TIMEOUT_TESTS)
+            tool_log.log_result(f"exit={code}")
+            return f"exit_code={code}\n{out}"
+        except asyncio.TimeoutError:
+            tool_log.log_result("timeout")
+            return "error: pytest timed out after 120s"
+        except Exception as e:
+            tool_log.log_result(f"error: {e}")
+            return f"error: {e}"
 
 
 async def run_agent_subprocess(task: str) -> str:
@@ -94,12 +103,16 @@ async def run_agent_subprocess(task: str) -> str:
     Args:
         task: Task to run (e.g. 'echo hello' or 'run status').
     """
-    logger.info("Tool run_agent_subprocess: %s", task[:80])
-    cmd = [_python(), "-m", "agent", "run", task]
-    try:
-        code, out = await _run_subprocess(cmd, TIMEOUT_AGENT)
-        return f"exit_code={code}\n{out}"
-    except asyncio.TimeoutError:
-        return "error: agent subprocess timed out after 90s"
-    except Exception as e:
-        return f"error: {e}"
+    with log_tool_call("run_agent_subprocess", task[:50]) as tool_log:
+        logger.info("Tool run_agent_subprocess: %s", task[:80])
+        cmd = [_python(), "-m", "agent", "run", task]
+        try:
+            code, out = await _run_subprocess(cmd, TIMEOUT_AGENT)
+            tool_log.log_result(f"exit={code}")
+            return f"exit_code={code}\n{out}"
+        except asyncio.TimeoutError:
+            tool_log.log_result("timeout")
+            return "error: agent subprocess timed out after 90s"
+        except Exception as e:
+            tool_log.log_result(f"error: {e}")
+            return f"error: {e}"

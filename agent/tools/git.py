@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 
+from agent.activity_log import log_tool_call
 from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -64,12 +65,15 @@ async def _run_git(args: list[str]) -> tuple[int, str]:
 
 async def git_status() -> str:
     """Show git status (working tree, staged, branch)."""
-    logger.info("Tool git_status")
-    code, out = await _run_git(["status", "--short"])
-    branch_code, branch_out = await _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
-    branch = branch_out.strip() if branch_code == 0 else "?"
-    header = f"Branch: {branch}\n\n"
-    return header + (out or "Working tree clean")
+    with log_tool_call("git_status") as tool_log:
+        logger.info("Tool git_status")
+        code, out = await _run_git(["status", "--short"])
+        branch_code, branch_out = await _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        branch = branch_out.strip() if branch_code == 0 else "?"
+        header = f"Branch: {branch}\n\n"
+        result = header + (out or "Working tree clean")
+        tool_log.log_result(f"branch={branch}, {len(out.split(chr(10)))} lines")
+        return result
 
 
 async def git_add(paths: list[str]) -> str:
@@ -78,11 +82,14 @@ async def git_add(paths: list[str]) -> str:
     Args:
         paths: File paths to stage (relative to workspace). Use ["."] for all.
     """
-    logger.info("Tool git_add: %s", paths)
-    code, out = await _run_git(["add"] + paths)
-    if code != 0:
-        return f"error (exit {code}): {out}"
-    return f"Staged: {', '.join(paths)}"
+    with log_tool_call("git_add", ", ".join(paths)) as tool_log:
+        logger.info("Tool git_add: %s", paths)
+        code, out = await _run_git(["add"] + paths)
+        if code != 0:
+            tool_log.log_result(f"error (exit {code})")
+            return f"error (exit {code}): {out}"
+        tool_log.log_result(f"staged {len(paths)} paths")
+        return f"Staged: {', '.join(paths)}"
 
 
 async def git_commit(message: str) -> str:
@@ -91,13 +98,17 @@ async def git_commit(message: str) -> str:
     Args:
         message: Commit message (required).
     """
-    logger.info("Tool git_commit: %s", message[:50])
-    if not message.strip():
-        return "error: commit message cannot be empty"
-    code, out = await _run_git(["commit", "-m", message])
-    if code != 0:
-        return f"error (exit {code}): {out}"
-    return f"Committed: {out.split(chr(10))[0] if out else message}"
+    with log_tool_call("git_commit", message[:50]) as tool_log:
+        logger.info("Tool git_commit: %s", message[:50])
+        if not message.strip():
+            tool_log.log_result("error: empty message")
+            return "error: commit message cannot be empty"
+        code, out = await _run_git(["commit", "-m", message])
+        if code != 0:
+            tool_log.log_result(f"error (exit {code})")
+            return f"error (exit {code}): {out}"
+        tool_log.log_result("committed")
+        return f"Committed: {out.split(chr(10))[0] if out else message}"
 
 
 async def git_pull(branch: str = "main") -> str:
@@ -106,13 +117,16 @@ async def git_pull(branch: str = "main") -> str:
     Args:
         branch: Branch to pull.
     """
-    logger.info("Tool git_pull: %s", branch)
-    # Ensure gh credential helper is configured for authentication
-    await _run_gh_auth_setup()
-    code, out = await _run_git(["pull", "origin", branch])
-    if code != 0:
-        return f"error (exit {code}): {out}"
-    return f"Pulled {branch} successfully"
+    with log_tool_call("git_pull", branch) as tool_log:
+        logger.info("Tool git_pull: %s", branch)
+        # Ensure gh credential helper is configured for authentication
+        await _run_gh_auth_setup()
+        code, out = await _run_git(["pull", "origin", branch])
+        if code != 0:
+            tool_log.log_result(f"error (exit {code})")
+            return f"error (exit {code}): {out}"
+        tool_log.log_result("pulled")
+        return f"Pulled {branch} successfully"
 
 
 async def git_checkout(branch: str) -> str:
@@ -121,11 +135,14 @@ async def git_checkout(branch: str) -> str:
     Args:
         branch: Branch name (e.g. main).
     """
-    logger.info("Tool git_checkout: %s", branch)
-    code, out = await _run_git(["checkout", branch])
-    if code != 0:
-        return f"error (exit {code}): {out}"
-    return f"Switched to {branch}"
+    with log_tool_call("git_checkout", branch) as tool_log:
+        logger.info("Tool git_checkout: %s", branch)
+        code, out = await _run_git(["checkout", branch])
+        if code != 0:
+            tool_log.log_result(f"error (exit {code})")
+            return f"error (exit {code}): {out}"
+        tool_log.log_result(f"switched to {branch}")
+        return f"Switched to {branch}"
 
 
 async def git_push(branch: str | None = None) -> str:
@@ -137,16 +154,19 @@ async def git_push(branch: str | None = None) -> str:
     Args:
         branch: Branch to push. Default: current branch.
     """
-    logger.info("Tool git_push: %s", branch or "current")
-    
-    # Ensure gh credential helper is configured for authentication
-    auth_code, auth_out = await _run_gh_auth_setup()
-    if auth_code != 0:
-        logger.warning("gh auth setup-git returned: %s", auth_out)
-    
-    # Now push using gh credential helper for authentication
-    args = ["push", "origin", branch] if branch else ["push", "origin", "HEAD"]
-    code, out = await _run_git(args)
-    if code != 0:
-        return f"error (exit {code}): {out}"
-    return "Pushed successfully"
+    with log_tool_call("git_push", branch or "current") as tool_log:
+        logger.info("Tool git_push: %s", branch or "current")
+        
+        # Ensure gh credential helper is configured for authentication
+        auth_code, auth_out = await _run_gh_auth_setup()
+        if auth_code != 0:
+            logger.warning("gh auth setup-git returned: %s", auth_out)
+        
+        # Now push using gh credential helper for authentication
+        args = ["push", "origin", branch] if branch else ["push", "origin", "HEAD"]
+        code, out = await _run_git(args)
+        if code != 0:
+            tool_log.log_result(f"error (exit {code})")
+            return f"error (exit {code}): {out}"
+        tool_log.log_result("pushed")
+        return "Pushed successfully"
