@@ -55,7 +55,10 @@ def main():
         asyncio.run(_run_task(args.task))
     elif args.command == "status":
         print("Agent status: idle")
-        tools = "shell, filesystem, web_search, todo, backup, run_tests, run_agent_subprocess"
+        tools = (
+            "shell, filesystem, web_search, todo, backup, run_tests, "
+            "run_agent_subprocess, git, request_restart"
+        )
         print(f"Available tools: {tools}")
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot

@@ -37,7 +37,7 @@ HELP_TEXT = (
     "Multiple tasks run concurrently — the bot stays responsive.\n\n"
     "*Available tools:*\n"
     "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
-    "📋 TODO (plan steps), 🔄 Backup & self-test"
+    "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart"
 )
 
 
@@ -143,6 +143,14 @@ async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
     if len(reply) > 4096:
         reply = reply[:4090] + "\n…"
     await bot.send_message(chat_id=chat_id, text=reply)
+
+    from agent.tools import restart
+
+    if restart.RESTART_REQUESTED:
+        logger.info("Restart requested by agent, exec new process")
+        import sys
+
+        os.execv(sys.executable, [sys.executable, "-m", "agent", "bot"])
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
