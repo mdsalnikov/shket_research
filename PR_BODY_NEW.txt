@@ -1,0 +1,1 @@
+Bumped VERSION to 0.3.11. All tests pass with USE_VLLM=1. No functional changes, just version bump.
