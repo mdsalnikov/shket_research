@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable, Awaitable
@@ -54,6 +55,96 @@ class HealingResult:
     message: str
     compressed_history: list[dict[str, Any]] | None = None
     wait_seconds: int | None = None
+
+
+@dataclass
+class CapturedRun:
+    """Captured run state for history preservation.
+    
+    Stores messages exchanged during a run, even if it crashes.
+    Used to preserve partial results for fallback generation.
+    
+    Attributes:
+        user_messages: List of user messages
+        assistant_messages: List of assistant messages
+        tool_calls: List of tool call records
+        last_error: Last error that occurred (if any)
+        attempt_count: Number of attempts made
+        
+    """
+    user_messages: list[str] = field(default_factory=list)
+    assistant_messages: list[str] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    last_error: str | None = None
+    attempt_count: int = 0
+
+
+@asynccontextmanager
+async def capture_run_messages(deps: Any):
+    """Context manager that captures run messages even on crash.
+    
+    Ensures that conversation history is preserved even when
+    agent execution fails. This allows fallback generation
+    to use partial results.
+    
+    Args:
+        deps: AgentDeps instance
+        
+    Yields:
+        CapturedRun instance to track messages
+        
+    Example:
+        async with capture_run_messages(deps) as captured:
+            result = await agent.run(task, deps=deps)
+            captured.assistant_messages.append(result.output)
+        
+        # Even if exception occurs, captured has partial history
+        
+    """
+    captured = CapturedRun()
+    
+    try:
+        # Get existing history from deps
+        if hasattr(deps, 'get_conversation_history'):
+            try:
+                history = await deps.get_conversation_history(limit=50)
+                for msg in history:
+                    if msg.get('role') == 'user':
+                        captured.user_messages.append(str(msg.get('content', '')))
+                    elif msg.get('role') == 'assistant':
+                        captured.assistant_messages.append(str(msg.get('content', '')))
+                    elif msg.get('role') == 'tool':
+                        captured.tool_calls.append(msg)
+            except Exception as e:
+                logger.debug(f"Could not load history: {e}")
+        
+        yield captured
+        
+    except Exception as e:
+        # Capture error before re-raising
+        captured.last_error = str(e)
+        logger.error(f"Run failed with error: {e}")
+        raise
+        
+    finally:
+        # Ensure messages are stored in deps for fallback
+        try:
+            # Store captured messages in deps for later use
+            if hasattr(deps, '_captured_run'):
+                deps._captured_run = captured
+            
+            # Try to persist any uncommitted messages
+            if captured.assistant_messages and hasattr(deps, 'add_assistant_message'):
+                # Only add if not already in session
+                try:
+                    last_assistant = captured.assistant_messages[-1]
+                    if last_assistant:
+                        # This might fail if session is closed, that's OK
+                        await deps.add_assistant_message(last_assistant)
+                except Exception as e:
+                    logger.debug(f"Could not save final assistant message: {e}")
+        except Exception as e:
+            logger.warning(f"Could not finalize captured messages: {e}")
 
 
 class HealingStrategy:
@@ -212,6 +303,7 @@ class SelfHealingRunner:
     2. Apply appropriate healing strategy (compress/wait/fallback)
     3. Generate meaningful responses even on failure
     4. Track attempts only for retryable errors
+    5. Preserve history even on crash via capture_run_messages
     
     Example:
         runner = SelfHealingRunner()
@@ -265,6 +357,8 @@ class SelfHealingRunner:
     ) -> tuple[str, bool]:
         """Run agent with self-healing.
         
+        Uses capture_run_messages to preserve history even on crash.
+        
         Args:
             agent: Agent instance with .run() method
             task: Task description
@@ -284,93 +378,98 @@ class SelfHealingRunner:
         self._retryable_attempts = 0
         self._total_attempts = 0
         
-        for attempt in range(n):
-            self._total_attempts += 1
-            
-            try:
-                logger.info(f"Running task (attempt {attempt + 1}/{n})")
-                result = await agent.run(current_task, deps=deps)
+        # Use capture_run_messages to preserve history even on crash
+        async with capture_run_messages(deps) as captured:
+            for attempt in range(n):
+                self._total_attempts += 1
+                captured.attempt_count = attempt + 1
                 
-                # Log assistant response
-                await deps.add_assistant_message(result.output)
+                try:
+                    logger.info(f"Running task (attempt {attempt + 1}/{n})")
+                    result = await agent.run(current_task, deps=deps)
+                    
+                    # Log assistant response
+                    await deps.add_assistant_message(result.output)
+                    captured.assistant_messages.append(result.output)
+                    
+                    logger.info("Task completed successfully")
+                    return result.output, True
                 
-                logger.info("Task completed successfully")
-                return result.output, True
-            
-            except Exception as e:
-                last_error = e
-                last_classified = self.classifier.classify(e)
-                
-                logger.warning(f"Attempt {attempt + 1}/{n} failed: {e}")
-                deps.last_error = str(e)
-                
-                # Determine if this counts as a retry
-                if self.should_count_as_retry(e):
-                    self._retryable_attempts += 1
-                    deps.retry_count = self._retryable_attempts
-                else:
-                    # Non-retryable error - don't count it
-                    logger.info(f"Non-retryable error: {last_classified.error_type.name}")
-                
-                # Determine healing action
-                action = self.strategy.determine_action(last_classified, attempt, n)
-                
-                # Execute healing action
-                healing_result = await self.strategy.execute(
-                    action, deps, e, attempt, n
-                )
-                
-                if not healing_result.success:
-                    # Healing failed, generate fallback
-                    if action == HealingAction.ABORT:
-                        # Immediate abort - don't waste retries
+                except Exception as e:
+                    last_error = e
+                    last_classified = self.classifier.classify(e)
+                    
+                    logger.warning(f"Attempt {attempt + 1}/{n} failed: {e}")
+                    deps.last_error = str(e)
+                    captured.last_error = str(e)
+                    
+                    # Determine if this counts as a retry
+                    if self.should_count_as_retry(e):
+                        self._retryable_attempts += 1
+                        deps.retry_count = self._retryable_attempts
+                    else:
+                        # Non-retryable error - don't count it
+                        logger.info(f"Non-retryable error: {last_classified.error_type.name}")
+                    
+                    # Determine healing action
+                    action = self.strategy.determine_action(last_classified, attempt, n)
+                    
+                    # Execute healing action
+                    healing_result = await self.strategy.execute(
+                        action, deps, e, attempt, n
+                    )
+                    
+                    if not healing_result.success:
+                        # Healing failed, generate fallback
+                        if action == HealingAction.ABORT:
+                            # Immediate abort - don't waste retries
+                            fallback = await create_fallback_from_session(
+                                deps, e, attempt + 1
+                            )
+                            return fallback, False
+                        
+                        # Generate fallback and return
                         fallback = await create_fallback_from_session(
                             deps, e, attempt + 1
                         )
                         return fallback, False
                     
-                    # Generate fallback and return
-                    fallback = await create_fallback_from_session(
-                        deps, e, attempt + 1
-                    )
-                    return fallback, False
-                
-                # Prepare for retry
-                if action == HealingAction.COMPRESS_AND_RETRY:
-                    # Context was compressed, use compressed history
-                    if healing_result.compressed_history:
-                        # Add compression note to task
+                    # Prepare for retry
+                    if action == HealingAction.COMPRESS_AND_RETRY:
+                        # Context was compressed, use compressed history
+                        if healing_result.compressed_history:
+                            # Add compression note to task
+                            current_task = self.fallback.generate_retry_prompt(
+                                task, e, attempt, n
+                            )
+                            # Store compressed history for next attempt
+                            deps._compressed_history = healing_result.compressed_history
+                    
+                    elif action == HealingAction.WAIT_AND_RETRY:
+                        # Already waited, prepare retry prompt
                         current_task = self.fallback.generate_retry_prompt(
                             task, e, attempt, n
                         )
-                        # Store compressed history for next attempt
-                        deps._compressed_history = healing_result.compressed_history
-                
-                elif action == HealingAction.WAIT_AND_RETRY:
-                    # Already waited, prepare retry prompt
-                    current_task = self.fallback.generate_retry_prompt(
-                        task, e, attempt, n
-                    )
-                
-                elif action == HealingAction.RETRY:
-                    # Simple retry with error context
-                    current_task = self.fallback.generate_retry_prompt(
-                        task, e, attempt, n
-                    )
-                
-                else:
-                    # Fallback action
-                    fallback = await create_fallback_from_session(
-                        deps, e, attempt + 1
-                    )
-                    return fallback, False
-        
-        # Exhausted all attempts
-        fallback = await create_fallback_from_session(
-            deps, last_error, n
-        ) if last_error else "Task failed without error"
-        
-        return fallback, False
+                    
+                    elif action == HealingAction.RETRY:
+                        # Simple retry with error context
+                        current_task = self.fallback.generate_retry_prompt(
+                            task, e, attempt, n
+                        )
+                    
+                    else:
+                        # Fallback action
+                        fallback = await create_fallback_from_session(
+                            deps, e, attempt + 1
+                        )
+                        return fallback, False
+            
+            # Exhausted all attempts
+            fallback = await create_fallback_from_session(
+                deps, last_error, n
+            ) if last_error else "Task failed without error"
+            
+            return fallback, False
     
     def get_stats(self) -> dict[str, int]:
         """Get healing statistics.
