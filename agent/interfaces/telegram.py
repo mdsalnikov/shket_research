@@ -36,10 +36,8 @@ HELP_TEXT = (
     "Send any text message to give the agent a task.\n"
     "Multiple tasks run concurrently — the bot stays responsive.\n\n"
     "*Available tools:*\n"
-    "🐚 Shell — execute OS commands\n"
-    "🌐 Web search — search the internet\n"
-    "📁 Filesystem — read / write / list files\n"
-    "🔍 Deep Research — multi-step web research"
+    "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
+    "📋 TODO (plan steps), 🔄 Backup & self-test"
 )
 
 
@@ -115,11 +113,12 @@ async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not os.path.exists(LOG_FILE):
         await update.message.reply_text("Log file not found.")
         return
-    await update.message.reply_document(
-        document=open(LOG_FILE, "rb"),
-        filename="agent.log",
-        caption="📜 Full agent log",
-    )
+    with open(LOG_FILE, "rb") as f:
+        await update.message.reply_document(
+            document=f,
+            filename="agent.log",
+            caption="📜 Full agent log",
+        )
 
 
 async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

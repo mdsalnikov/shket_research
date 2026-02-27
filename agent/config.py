@@ -8,7 +8,8 @@ load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TG_BOT_KEY = os.getenv("TG_BOT_KEY", "")
 DEFAULT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
-LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "agent.log")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")
 
 
 def setup_logging() -> None:

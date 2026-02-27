@@ -44,10 +44,7 @@ async def get_todo() -> str:
     done = set(data.get("done", []))
     if not tasks:
         return "No TODO list. Use create_todo to start one."
-    lines = []
-    for i, t in enumerate(tasks):
-        status = "[x]" if i in done else "[ ]"
-        lines.append(f"{i+1}. {status} {t}")
+    lines = [f"{i+1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
     return "TODO:\n" + "\n".join(lines)
 
 

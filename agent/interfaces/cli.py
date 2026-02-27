@@ -24,8 +24,7 @@ def _show_logs(n: int) -> None:
         return
     tail = lines[-n:] if len(lines) > n else lines
     print(f"--- last {len(tail)} of {len(lines)} log entries ---")
-    for line in tail:
-        print(line, end="")
+    print("".join(tail), end="")
 
 
 def main():
@@ -56,7 +55,8 @@ def main():
         asyncio.run(_run_task(args.task))
     elif args.command == "status":
         print("Agent status: idle")
-        print("Available tools: shell, browser, filesystem, web_search")
+        tools = "shell, filesystem, web_search, todo, backup, run_tests, run_agent_subprocess"
+        print(f"Available tools: {tools}")
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
 

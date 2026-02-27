@@ -57,28 +57,24 @@ def build_agent(
     model_name: str | None = None,
     api_key: str | None = None,
 ) -> Agent:
-    model = build_model(model_name, api_key)
     from agent.tools.filesystem import list_dir, read_file, write_file
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
     from agent.tools.shell import run_shell
     from agent.tools.todo import create_todo, get_todo, mark_todo_done
     from agent.tools.web import web_search
 
-    agent = Agent(
-        model,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[
-            run_shell,
-            read_file,
-            write_file,
-            list_dir,
-            web_search,
-            create_todo,
-            get_todo,
-            mark_todo_done,
-            backup_codebase,
-            run_tests,
-            run_agent_subprocess,
-        ],
-    )
-    return agent
+    model = build_model(model_name, api_key)
+    tools = [
+        run_shell,
+        read_file,
+        write_file,
+        list_dir,
+        web_search,
+        create_todo,
+        get_todo,
+        mark_todo_done,
+        backup_codebase,
+        run_tests,
+        run_agent_subprocess,
+    ]
+    return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)
