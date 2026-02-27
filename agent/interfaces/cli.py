@@ -1,4 +1,4 @@
-"""CLI interface with session support."""
+'''CLI interface with session support.'''
 
 import argparse
 import asyncio
@@ -32,6 +32,13 @@ def _builtin_status() -> str:
         "Usage: python -m agent run 'your task' [--provider vllm|openrouter]"
     )
 
+def _is_builtin_status(task: str) -> bool:
+    """Detect if a task string is a request for the built‑in status.
+    Handles variations like "status", "run status", "agent status".
+    """
+    cleaned = task.strip().lower()
+    return cleaned == "status" or cleaned.endswith(" status")
+
 async def _run_task(task: str, provider: str | None = None) -> None:
     """Run a task with session support (CLI mode uses chat_id=0).
     
@@ -45,7 +52,7 @@ async def _run_task(task: str, provider: str | None = None) -> None:
         provider: 'vllm' or 'openrouter' (default: from config)
     
     """
-    if task.strip().lower() == "status":
+    if _is_builtin_status(task):
         print(_builtin_status())
         await close_db()
         return
