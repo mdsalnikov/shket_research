@@ -1,0 +1,385 @@
+"""Self-healing strategies and main runner integration.
+
+Orchestrates error classification, context compression, and fallback
+generation for intelligent error recovery.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Any, Callable, Awaitable
+
+from agent.healing.classifier import (
+    ErrorClassifier,
+    ErrorType,
+    ClassifiedError,
+)
+from agent.healing.compressor import ContextCompressor, compress_session_history
+from agent.healing.fallback import (
+    FallbackHandler,
+    PartialResult,
+    create_fallback_from_session,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class HealingAction(Enum):
+    """Actions the healing system can take."""
+    
+    RETRY = auto()              # Simple retry
+    COMPRESS_AND_RETRY = auto() # Compress context then retry
+    WAIT_AND_RETRY = auto()     # Wait before retry
+    FALLBACK = auto()           # Give up, return fallback
+    ABORT = auto()              # Immediately abort (no retry possible)
+
+
+@dataclass
+class HealingResult:
+    """Result of healing attempt.
+    
+    Attributes:
+        action: Action taken
+        success: Whether healing succeeded
+        message: Status message
+        compressed_history: Compressed history (if applicable)
+        wait_seconds: Wait time (if applicable)
+        
+    """
+    action: HealingAction
+    success: bool
+    message: str
+    compressed_history: list[dict[str, Any]] | None = None
+    wait_seconds: int | None = None
+
+
+class HealingStrategy:
+    """Determines healing strategy based on error classification.
+    
+    Maps error types to appropriate healing actions and manages
+    the healing process.
+    
+    Example:
+        strategy = HealingStrategy()
+        action = strategy.determine_action(classified_error)
+        result = await strategy.execute(action, deps, error)
+        
+    """
+    
+    def __init__(
+        self,
+        max_retries: int = 3,
+        max_wait_seconds: int = 60,
+    ):
+        """Initialize healing strategy.
+        
+        Args:
+            max_retries: Maximum retries for recoverable errors
+            max_wait_seconds: Maximum wait time for rate limits
+            
+        """
+        self.max_retries = max_retries
+        self.max_wait_seconds = max_wait_seconds
+        self.classifier = ErrorClassifier()
+        self.compressor = ContextCompressor()
+        self.fallback = FallbackHandler()
+    
+    def determine_action(
+        self,
+        classified: ClassifiedError,
+        attempt: int,
+        max_attempts: int,
+    ) -> HealingAction:
+        """Determine appropriate healing action.
+        
+        Args:
+            classified: Classified error
+            attempt: Current attempt number (0-indexed)
+            max_attempts: Maximum attempts
+            
+        Returns:
+            HealingAction to take
+            
+        """
+        # If we've exhausted retries, fallback
+        if attempt >= max_attempts - 1:
+            return HealingAction.FALLBACK
+        
+        # Map error type to action
+        action_map = {
+            ErrorType.CONTEXT_OVERFLOW: HealingAction.COMPRESS_AND_RETRY,
+            ErrorType.RATE_LIMIT: HealingAction.WAIT_AND_RETRY,
+            ErrorType.USAGE_LIMIT: HealingAction.ABORT,
+            ErrorType.AUTH_ERROR: HealingAction.ABORT,
+            ErrorType.FATAL: HealingAction.FALLBACK,
+            ErrorType.RECOVERABLE: HealingAction.RETRY,
+            ErrorType.UNKNOWN: HealingAction.RETRY,
+        }
+        
+        return action_map.get(classified.error_type, HealingAction.RETRY)
+    
+    async def execute(
+        self,
+        action: HealingAction,
+        deps: Any,
+        error: Exception,
+        attempt: int,
+        max_attempts: int,
+    ) -> HealingResult:
+        """Execute healing action.
+        
+        Args:
+            action: Action to execute
+            deps: AgentDeps instance
+            error: The exception that occurred
+            attempt: Current attempt number
+            max_attempts: Maximum attempts
+            
+        Returns:
+            HealingResult with outcome
+            
+        """
+        classified = self.classifier.classify(error)
+        
+        if action == HealingAction.RETRY:
+            return HealingResult(
+                action=action,
+                success=True,
+                message="Retrying with error context",
+            )
+        
+        elif action == HealingAction.COMPRESS_AND_RETRY:
+            try:
+                result = await compress_session_history(deps, target_messages=10)
+                return HealingResult(
+                    action=action,
+                    success=True,
+                    message=f"Compressed context (removed {result.removed_count} messages)",
+                    compressed_history=result.compressed_history,
+                )
+            except Exception as e:
+                logger.error(f"Context compression failed: {e}")
+                return HealingResult(
+                    action=HealingAction.FALLBACK,
+                    success=False,
+                    message=f"Compression failed: {e}",
+                )
+        
+        elif action == HealingAction.WAIT_AND_RETRY:
+            wait_seconds = classified.metadata.get("wait_seconds", 30)
+            wait_seconds = min(wait_seconds, self.max_wait_seconds)
+            
+            logger.info(f"Rate limited, waiting {wait_seconds}s...")
+            await asyncio.sleep(wait_seconds)
+            
+            return HealingResult(
+                action=action,
+                success=True,
+                message=f"Waited {wait_seconds}s, ready to retry",
+                wait_seconds=wait_seconds,
+            )
+        
+        elif action == HealingAction.ABORT:
+            return HealingResult(
+                action=action,
+                success=False,
+                message="Non-retryable error, aborting",
+            )
+        
+        elif action == HealingAction.FALLBACK:
+            return HealingResult(
+                action=action,
+                success=False,
+                message="Generating fallback response",
+            )
+        
+        # Default: retry
+        return HealingResult(
+            action=HealingAction.RETRY,
+            success=True,
+            message="Unknown action, defaulting to retry",
+        )
+
+
+class SelfHealingRunner:
+    """Main self-healing runner that wraps agent execution.
+    
+    Integrates with run_with_retry to provide intelligent error recovery:
+    1. Classify errors to determine if retry makes sense
+    2. Apply appropriate healing strategy (compress/wait/fallback)
+    3. Generate meaningful responses even on failure
+    4. Track attempts only for retryable errors
+    
+    Example:
+        runner = SelfHealingRunner()
+        result = await runner.run(
+            agent=agent,
+            task="analyze files",
+            deps=deps,
+            max_retries=5,
+        )
+        
+    """
+    
+    def __init__(self, max_retries: int | None = None):
+        """Initialize self-healing runner.
+        
+        Args:
+            max_retries: Override max retries (uses config if None)
+            
+        """
+        from agent.config import MAX_RETRIES
+        self.max_retries = max_retries or MAX_RETRIES
+        self.strategy = HealingStrategy(max_retries=self.max_retries)
+        self.classifier = ErrorClassifier()
+        self.fallback = FallbackHandler()
+        
+        # Track actual retry attempts (only for retryable errors)
+        self._retryable_attempts = 0
+        self._total_attempts = 0
+    
+    def should_count_as_retry(self, error: Exception) -> bool:
+        """Check if error should count against retry limit.
+        
+        Non-retryable errors (USAGE_LIMIT, AUTH_ERROR) don't waste retries.
+        
+        Args:
+            error: The exception that occurred
+            
+        Returns:
+            True if this should count as a retry attempt
+            
+        """
+        classified = self.classifier.classify(error)
+        return classified.is_retryable
+    
+    async def run(
+        self,
+        agent: Any,
+        task: str,
+        deps: Any,
+        max_retries: int | None = None,
+    ) -> tuple[str, bool]:
+        """Run agent with self-healing.
+        
+        Args:
+            agent: Agent instance with .run() method
+            task: Task description
+            deps: AgentDeps instance
+            max_retries: Override max retries
+            
+        Returns:
+            Tuple of (response, success)
+            
+        """
+        n = max_retries or self.max_retries
+        current_task = task
+        last_error: Exception | None = None
+        last_classified: ClassifiedError | None = None
+        
+        # Reset attempt counters
+        self._retryable_attempts = 0
+        self._total_attempts = 0
+        
+        for attempt in range(n):
+            self._total_attempts += 1
+            
+            try:
+                logger.info(f"Running task (attempt {attempt + 1}/{n})")
+                result = await agent.run(current_task, deps=deps)
+                
+                # Log assistant response
+                await deps.add_assistant_message(result.output)
+                
+                logger.info("Task completed successfully")
+                return result.output, True
+            
+            except Exception as e:
+                last_error = e
+                last_classified = self.classifier.classify(e)
+                
+                logger.warning(f"Attempt {attempt + 1}/{n} failed: {e}")
+                deps.last_error = str(e)
+                
+                # Determine if this counts as a retry
+                if self.should_count_as_retry(e):
+                    self._retryable_attempts += 1
+                    deps.retry_count = self._retryable_attempts
+                else:
+                    # Non-retryable error - don't count it
+                    logger.info(f"Non-retryable error: {last_classified.error_type.name}")
+                
+                # Determine healing action
+                action = self.strategy.determine_action(last_classified, attempt, n)
+                
+                # Execute healing action
+                healing_result = await self.strategy.execute(
+                    action, deps, e, attempt, n
+                )
+                
+                if not healing_result.success:
+                    # Healing failed, generate fallback
+                    if action == HealingAction.ABORT:
+                        # Immediate abort - don't waste retries
+                        fallback = await create_fallback_from_session(
+                            deps, e, attempt + 1
+                        )
+                        return fallback, False
+                    
+                    # Generate fallback and return
+                    fallback = await create_fallback_from_session(
+                        deps, e, attempt + 1
+                    )
+                    return fallback, False
+                
+                # Prepare for retry
+                if action == HealingAction.COMPRESS_AND_RETRY:
+                    # Context was compressed, use compressed history
+                    if healing_result.compressed_history:
+                        # Add compression note to task
+                        current_task = self.fallback.generate_retry_prompt(
+                            task, e, attempt, n
+                        )
+                        # Store compressed history for next attempt
+                        deps._compressed_history = healing_result.compressed_history
+                
+                elif action == HealingAction.WAIT_AND_RETRY:
+                    # Already waited, prepare retry prompt
+                    current_task = self.fallback.generate_retry_prompt(
+                        task, e, attempt, n
+                    )
+                
+                elif action == HealingAction.RETRY:
+                    # Simple retry with error context
+                    current_task = self.fallback.generate_retry_prompt(
+                        task, e, attempt, n
+                    )
+                
+                else:
+                    # Fallback action
+                    fallback = await create_fallback_from_session(
+                        deps, e, attempt + 1
+                    )
+                    return fallback, False
+        
+        # Exhausted all attempts
+        fallback = await create_fallback_from_session(
+            deps, last_error, n
+        ) if last_error else "Task failed without error"
+        
+        return fallback, False
+    
+    def get_stats(self) -> dict[str, int]:
+        """Get healing statistics.
+        
+        Returns:
+            Dict with attempt counts
+            
+        """
+        return {
+            "total_attempts": self._total_attempts,
+            "retryable_attempts": self._retryable_attempts,
+        }
