@@ -13,7 +13,17 @@ MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "3"))
 # Project root: directory containing agent/ package (works from any cwd)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")
-VERSION = "0.0.2"
+
+# Read version from VERSION file
+def _get_version() -> str:
+    version_file = os.path.join(PROJECT_ROOT, "VERSION")
+    try:
+        with open(version_file, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "0.0.0"  # Fallback if VERSION file doesn't exist
+
+VERSION = _get_version()
 
 
 def setup_logging() -> None:
