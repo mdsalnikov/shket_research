@@ -5,11 +5,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# VLLM configuration (local inference, priority over OpenRouter)
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "")
+USE_VLLM = os.getenv("USE_VLLM", "false").lower() in ("true", "1", "yes")
+
+# OpenRouter configuration (cloud inference fallback)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+# Telegram bot
 TG_BOT_KEY = os.getenv("TG_BOT_KEY", "")
+
+# Model configuration
 DEFAULT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
+
 # Max retries when task fails; agent tries to self-heal before giving up
 MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "10"))
+
 # Project root: directory containing agent/ package (works from any cwd)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")

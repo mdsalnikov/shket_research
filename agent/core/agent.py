@@ -9,10 +9,18 @@ from __future__ import annotations
 import logging
 
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from agent.config import DEFAULT_MODEL, OPENROUTER_API_KEY, VERSION
+from agent.config import (
+    DEFAULT_MODEL,
+    OPENROUTER_API_KEY,
+    USE_VLLM,
+    VLLM_BASE_URL,
+    VERSION,
+)
 from agent.dependencies import AgentDeps
 
 logger = logging.getLogger(__name__)
@@ -107,29 +115,47 @@ Session Management (OpenClaw-inspired):
 def build_model(
     model_name: str | None = None,
     api_key: str | None = None,
-) -> OpenRouterModel:
-    """Build OpenRouter model instance.
-    
+) -> OpenAIModel | OpenRouterModel:
+    """Build model instance (VLLM local or OpenRouter cloud).
+
+    Priority:
+    1. VLLM local (USE_VLLM=true) - uses OpenAIModel with VLLM_BASE_URL
+    2. OpenRouter cloud (fallback) - uses OpenRouterModel
+
     Args:
-        model_name: Model identifier (e.g., 'anthropic/claude-3.5-sonnet')
-        api_key: OpenRouter API key
-        
+        model_name: Model identifier (e.g., 'openai/gpt-oss-120b')
+        api_key: API key (for OpenRouter only)
+
     Returns:
-        Configured OpenRouterModel instance
-        
+        Configured model instance (OpenAIModel for VLLM, OpenRouterModel for cloud)
+
     """
+    model_id = model_name or DEFAULT_MODEL
+
+    # Use VLLM local endpoint if configured
+    if USE_VLLM and VLLM_BASE_URL:
+        logger.info(f"Using VLLM local endpoint: {VLLM_BASE_URL}")
+        logger.info(f"Model: {model_id}")
+        return OpenAIModel(
+            model_id,
+            provider=OpenAIProvider(base_url=VLLM_BASE_URL),
+        )
+
+    # Fallback to OpenRouter cloud
+    logger.info(f"Using OpenRouter cloud endpoint")
+    logger.info(f"Model: {model_id}")
     return OpenRouterModel(
-        model_name or DEFAULT_MODEL,
+        model_id,
         provider=OpenRouterProvider(api_key=api_key or OPENROUTER_API_KEY),
     )
 
 
 def get_all_tools() -> list:
     """Get all available tools for the agent.
-    
+
     Returns:
         List of tool functions
-        
+
     """
     from agent.tools.filesystem import list_dir, read_file, write_file
     from agent.tools.gh import run_gh
@@ -178,17 +204,17 @@ def build_agent(
     api_key: str | None = None,
 ) -> Agent:
     """Build agent with all tools (legacy mode without dependencies).
-    
+
     This creates a simple agent without session support.
     Use build_session_agent for full SQLite session persistence.
-    
+
     Args:
         model_name: Model identifier
-        api_key: OpenRouter API key
-        
+        api_key: API key (for OpenRouter only)
+
     Returns:
         Agent instance (without session support)
-        
+
     """
     model = build_model(model_name, api_key)
     tools = get_all_tools()
@@ -205,20 +231,20 @@ def build_session_agent(
     This is the preferred way to build agents with SQLite persistence.
     The agent will have access to session history and memory through
     the RunContext passed to tools.
-    
+
     Architecture (OpenClaw-inspired):
     - Sessions stored in SQLite with per-chat isolation
     - Memory with L0/L1/L2 hierarchy
     - Dependency injection via AgentDeps
     - Dynamic system prompt with memory context
-    
+
     Args:
         model_name: Model identifier
-        api_key: OpenRouter API key
-        
+        api_key: API key (for OpenRouter only)
+
     Returns:
         Agent instance with session support
-        
+
     """
     model = build_model(model_name, api_key)
     tools = get_all_tools()
@@ -233,18 +259,26 @@ def build_session_agent(
     @agent.system_prompt
     async def get_system_prompt(ctx) -> str:
         """Get system prompt with optional memory context.
-        
+
         Injects L0 memory summary into the system prompt for context
         continuity across sessions.
-        """
-        # Try to get memory context if deps available
-        try:
-            memory_context = await ctx.deps.get_context_summary()
-            if memory_context:
-                logger.debug("Injected memory context into system prompt")
-                return f"{SYSTEM_PROMPT}\n\n{memory_context}"
-        except Exception as e:
-            logger.debug(f"Could not get memory context: {e}")
-        return SYSTEM_PROMPT
 
+        """
+        base_prompt = SYSTEM_PROMPT
+
+        # Add memory context if available (L0 summary)
+        if hasattr(ctx.deps, "memory") and ctx.deps.memory:
+            memory_context = "\n\n## Memory Context (L0)\n"
+            for category, entries in ctx.deps.memory.items():
+                if entries:
+                    memory_context += f"\n### {category}\n"
+                    for entry in entries:
+                        memory_context += f"- {entry['abstract']}\n"
+
+            if memory_context != "\n\n## Memory Context (L0)\n":
+                base_prompt += memory_context
+
+        return base_prompt
+
+    logger.debug("Session agent built with SQLite persistence")
     return agent
