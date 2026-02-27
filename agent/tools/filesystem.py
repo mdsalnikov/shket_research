@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 
+from agent.activity_log import log_tool_call
 from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,15 @@ async def read_file(path: str) -> str:
     Args:
         path: Relative path from the workspace root.
     """
-    logger.info("Tool read_file: %s", path)
-    full = _safe_path(path)
-    with open(full) as f:
-        content = f.read()
-    if len(content) > 8000:
-        content = content[:8000] + "\n… (truncated)"
-    return content
+    with log_tool_call("read_file", path) as tool_log:
+        logger.info("Tool read_file: %s", path)
+        full = _safe_path(path)
+        with open(full) as f:
+            content = f.read()
+        if len(content) > 8000:
+            content = content[:8000] + "\n… (truncated)"
+        tool_log.log_result(f"{len(content)} chars")
+        return content
 
 
 async def write_file(path: str, content: str) -> str:
@@ -38,12 +41,14 @@ async def write_file(path: str, content: str) -> str:
         path: Relative path from the workspace root.
         content: The text content to write.
     """
-    logger.info("Tool write_file: %s (%d chars)", path, len(content))
-    full = _safe_path(path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w") as f:
-        f.write(content)
-    return f"Written {len(content)} chars to {path}"
+    with log_tool_call("write_file", path) as tool_log:
+        logger.info("Tool write_file: %s (%d chars)", path, len(content))
+        full = _safe_path(path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write(content)
+        tool_log.log_result(f"written {len(content)} chars")
+        return f"Written {len(content)} chars to {path}"
 
 
 async def list_dir(path: str = ".") -> str:
@@ -52,7 +57,9 @@ async def list_dir(path: str = ".") -> str:
     Args:
         path: Relative path from the workspace root. Defaults to root.
     """
-    logger.info("Tool list_dir: %s", path)
-    full = _safe_path(path)
-    entries = sorted(os.listdir(full))
-    return "\n".join(entries)
+    with log_tool_call("list_dir", path) as tool_log:
+        logger.info("Tool list_dir: %s", path)
+        full = _safe_path(path)
+        entries = sorted(os.listdir(full))
+        tool_log.log_result(f"{len(entries)} entries")
+        return "\n".join(entries)
