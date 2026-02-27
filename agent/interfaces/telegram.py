@@ -62,6 +62,9 @@ HELP_TEXT = (
     f"\n\nВерсия: {VERSION}"
 )
 
+# Telegram limit is 4096; use slightly less for safety
+MAX_MESSAGE_LENGTH = 4090
+
 # Whitelist error message
 WHITELIST_ERROR = (
     "⛔ *Access Denied*\n\n"
@@ -88,6 +91,21 @@ def _is_user_allowed(username: str | None) -> bool:
         return False
     
     return username.lower() in TG_WHITELIST
+
+
+async def _send_long_message(message, text: str) -> None:
+    """Send text in chunks so each message stays under Telegram's 4096 limit."""
+    text = str(text) if not isinstance(text, str) else text
+    while text:
+        if len(text) <= MAX_MESSAGE_LENGTH:
+            await message.reply_text(text)
+            return
+        chunk = text[:MAX_MESSAGE_LENGTH]
+        last_nl = chunk.rfind("\n")
+        if last_nl != -1:
+            chunk = chunk[: last_nl + 1]
+        await message.reply_text(chunk)
+        text = text[len(chunk) :]
 
 
 @dataclass
@@ -428,7 +446,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     provider=provider,
                 )
                 duration = time.time() - task_start
-                await update.message.reply_text(result)
+                await _send_long_message(update.message, result)
                 log_agent_response(chat_id, result)
                 log_task_end(task_id, True, duration)
 
