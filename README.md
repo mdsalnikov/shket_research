@@ -6,7 +6,7 @@ Autonomous LLM-powered agent for executing tasks on an Ubuntu server — control
 
 ## Overview
 
-OpenAgent is a self-sufficient AI agent built around a central orchestration core. It accepts commands through a CLI or a Telegram bot, executes arbitrary tasks on the host OS, and logs every action it takes. The agent is designed for research workflows, including web browsing, code execution, environment management, and deep research tasks.
+Shket Research Agent is a self-sufficient AI agent built around a central orchestration core. It accepts commands through a CLI or a Telegram bot, executes arbitrary tasks on the host OS, and logs every action it takes. The agent is designed for research workflows, including web browsing, code execution, environment management, and deep research tasks.
 
 ---
 
@@ -35,6 +35,90 @@ OpenAgent is a self-sufficient AI agent built around a central orchestration cor
 
 ---
 
+## Tools
+
+The agent has access to the following tools. All tool calls are routed through the Agent Core and logged automatically.
+
+### 🐚 Shell
+
+Execute arbitrary OS commands on the host Ubuntu server. The agent runs under a standard (non-root) user account.
+
+- Run any CLI command (`ls`, `curl`, `git`, `python`, …)
+- Install packages via Conda
+- Manage tmux sessions for long-running processes
+
+### 🌐 Browser
+
+Headless web browsing for environments without a GUI. Used for web search, page retrieval, form interaction, and scraping.
+
+- Candidate: [agent-browser by Vercel Labs](https://github.com/vercel-labs/agent-browser)
+- Operates in headless mode on Ubuntu Server
+- Integrates with the agent's tool-calling interface
+
+### 📁 Filesystem
+
+Read, write, list, and manage files on the host OS.
+
+- Create and edit files
+- Navigate directories
+- Read logs and configuration
+
+### 🔍 Deep Research
+
+Multi-step research workflows combining web search and synthesis.
+
+- Search the web and retrieve pages
+- Synthesize results across multiple sources
+- Save intermediate findings for iterative analysis
+
+---
+
+## Control Interfaces
+
+### CLI
+
+```bash
+python -m agent <command> [args]
+```
+
+| Command | Description |
+|---|---|
+| `run "task"` | Execute a task described in natural language |
+| `bot` | Start the Telegram bot (long-polling mode) |
+| `status` | Show agent status |
+
+**Examples:**
+
+```bash
+# Run a task
+python -m agent run "find all Python files larger than 1MB"
+
+# Start the Telegram bot
+python -m agent bot
+
+# Check status
+python -m agent status
+```
+
+### Telegram Bot
+
+Start the bot with `python -m agent bot`, then interact via Telegram.
+
+**Commands:**
+
+| Command | Description |
+|---|---|
+| `/start` | Start the bot / show welcome message |
+| `/help` | List available commands and tools |
+| `/status` | Show agent status and uptime |
+| `/panic` | 🛑 Emergency halt — immediately kill all agent processes |
+
+Any text message (not a command) is treated as a task for the agent.
+
+> Commands are registered with Telegram via `set_my_commands` — they appear in the bot's command menu automatically.
+
+---
+
 ## Environment Variables
 
 | Variable | Description |
@@ -42,16 +126,9 @@ OpenAgent is a self-sufficient AI agent built around a central orchestration cor
 | `OPENROUTER_API_KEY` | API key for [OpenRouter](https://openrouter.ai) — used during development |
 | `TG_BOT_KEY` | Telegram Bot API token (obtained via [@BotFather](https://t.me/BotFather)) |
 
-Copy `.env.example` to `.env` and fill in the values:
-
 ```bash
 cp .env.example .env
-```
-
-`.env.example`:
-```env
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-TG_BOT_KEY=your_telegram_bot_token_here
+# fill in OPENROUTER_API_KEY and TG_BOT_KEY
 ```
 
 ---
@@ -59,8 +136,6 @@ TG_BOT_KEY=your_telegram_bot_token_here
 ## Supported LLM Backends
 
 ### OpenRouter (default for development)
-
-The following models are approved for use (balance cost vs. capability):
 
 | Model | OpenRouter ID |
 |---|---|
@@ -73,28 +148,6 @@ The following models are approved for use (balance cost vs. capability):
 ### VLLM (local inference)
 
 The agent can be configured to call a locally hosted VLLM endpoint instead of OpenRouter. Set the appropriate base URL in config.
-
----
-
-## Control Interfaces
-
-### CLI
-
-Run the agent directly from the terminal:
-
-```bash
-python -m agent run "your task here"
-```
-
-### Telegram Bot
-
-Send commands to the agent via the configured Telegram bot. All agent output and logs are also sent back through the bot.
-
-**Special system commands:**
-
-| Command | Description |
-|---|---|
-| `/panic` | Immediately halt all current agent processes |
 
 ---
 
@@ -127,30 +180,7 @@ Logs are written to **both**:
 - **Privileges:** No root. Standard user only.
 - **Package management:** [Conda](https://docs.conda.io) — install anything in existing or new environments
 - **Session management:** [tmux](https://github.com/tmux/tmux) — use for persistent background sessions
-- **Browser:** Headless agent-browser (see below)
-
----
-
-## Web / Browser
-
-Since there is no GUI, a CLI-compatible browser agent is used. Candidate: **[agent-browser by Vercel Labs](https://github.com/vercel-labs/agent-browser)**.
-
-**Decision required:** evaluate `agent-browser` (and alternatives) for:
-- Headless compatibility on Ubuntu Server
-- Integration with the tool-calling interface
-- Reliability for search and page fetching tasks
-
----
-
-## Deep Research
-
-Deep research is a first-class use case. The agent should support multi-step research workflows including:
-
-- Web search and page retrieval
-- Synthesizing results across multiple sources
-- Saving intermediate findings
-
-> Implementation details TBD — will be defined in a follow-up design doc.
+- **Browser:** Headless agent-browser (see Tools → Browser)
 
 ---
 
@@ -189,9 +219,9 @@ The `/panic` command exists to interrupt a runaway or stuck agent at any time.
 git clone <repo-url>
 cd <repo>
 
-# 2. Create conda environment
-conda create -n agent python=3.11
-conda activate agent
+# 2. Create virtual environment
+python3.11 -m venv .venv
+source .venv/bin/activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
@@ -200,13 +230,16 @@ pip install -r requirements.txt
 cp .env.example .env
 # fill in OPENROUTER_API_KEY and TG_BOT_KEY
 
-# 5. Run
+# 5. Run a task via CLI
 python -m agent run "hello world"
+
+# 6. Or start the Telegram bot
+python -m agent bot
 ```
 
 ---
 
-## Project Structure (planned)
+## Project Structure
 
 ```
 agent/
@@ -218,7 +251,9 @@ agent/
 ├── config.py       # Env vars and settings
 └── __main__.py
 logs/
+tests/
 .env.example
+requirements.txt
 README.md
 ```
 
