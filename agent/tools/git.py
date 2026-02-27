@@ -1,4 +1,7 @@
-"""Git tools for committing and pushing self-modifications."""
+"""Git tools for committing and pushing self-modifications.
+
+Uses gh CLI for GitHub authentication (no SSH required).
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 30
+TIMEOUT = 60
 
 
 def _gh_token_env() -> dict:
@@ -29,9 +32,25 @@ def _gh_token_env() -> dict:
     return env
 
 
-async def _run_git(args: list[str], use_gh_token: bool = False) -> tuple[int, str]:
+async def _run_gh_auth_setup() -> tuple[int, str]:
+    """Run 'gh auth setup-git' to configure git to use gh as credential helper."""
+    env = _gh_token_env()
+    proc = await asyncio.create_subprocess_exec(
+        "gh", "auth", "setup-git",
+        cwd=PROJECT_ROOT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    out = stdout.decode(errors="replace").strip()
+    return proc.returncode or 0, out
+
+
+async def _run_git(args: list[str]) -> tuple[int, str]:
+    """Run git command with gh authentication configured."""
     cmd = ["git", "-C", PROJECT_ROOT] + args
-    env = _gh_token_env() if use_gh_token else None
+    env = _gh_token_env()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -82,12 +101,14 @@ async def git_commit(message: str) -> str:
 
 
 async def git_pull(branch: str = "main") -> str:
-    """Pull latest from remote. Default: main.
+    """Pull latest from remote. Uses gh CLI for authentication.
 
     Args:
         branch: Branch to pull.
     """
     logger.info("Tool git_pull: %s", branch)
+    # Ensure gh credential helper is configured for authentication
+    await _run_gh_auth_setup()
     code, out = await _run_git(["pull", "origin", branch])
     if code != 0:
         return f"error (exit {code}): {out}"
@@ -108,14 +129,24 @@ async def git_checkout(branch: str) -> str:
 
 
 async def git_push(branch: str | None = None) -> str:
-    """Push commits to remote. Uses GH_TOKEN from GHTOKEN.txt or env for auth.
+    """Push commits to remote. Uses gh CLI for authentication.
+
+    This function uses 'gh auth setup-git' to configure git to use gh CLI
+    as a credential helper, allowing push without SSH keys.
 
     Args:
         branch: Branch to push. Default: current branch.
     """
     logger.info("Tool git_push: %s", branch or "current")
-    args = ["push", "origin", branch] if branch else ["push"]
-    code, out = await _run_git(args, use_gh_token=True)
+    
+    # Ensure gh credential helper is configured for authentication
+    auth_code, auth_out = await _run_gh_auth_setup()
+    if auth_code != 0:
+        logger.warning("gh auth setup-git returned: %s", auth_out)
+    
+    # Now push using gh credential helper for authentication
+    args = ["push", "origin", branch] if branch else ["push", "origin", "HEAD"]
+    code, out = await _run_git(args)
     if code != 0:
         return f"error (exit {code}): {out}"
     return "Pushed successfully"
