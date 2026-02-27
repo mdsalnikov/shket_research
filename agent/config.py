@@ -9,7 +9,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TG_BOT_KEY = os.getenv("TG_BOT_KEY", "")
 DEFAULT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
 # Max retries when task fails; agent tries to self-heal before giving up
-MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "3"))
+MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "10"))
 # Project root: directory containing agent/ package (works from any cwd)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")

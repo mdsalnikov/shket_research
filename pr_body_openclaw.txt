@@ -1,0 +1,49 @@
+## Summary
+
+This PR refactors the session management system following OpenClaw's architecture concepts with full pydantic-ai integration.
+
+## Changes
+
+### New Modules
+- `agent/session.py` - Data classes for SessionMessage and MemoryEntry
+- `agent/session_db.py` - SessionDB class with SQLite storage and FTS5 search
+- `agent/session_globals.py` - Global singleton database instance
+
+### Updated Modules
+- `agent/dependencies.py` - Enhanced AgentDeps with full session/memory integration
+- `agent/core/agent.py` - Session agent builder with memory context injection
+- `agent/core/runner.py` - Task runner with session support
+- `agent/interfaces/cli.py` - Updated imports
+- `agent/interfaces/telegram.py` - Updated imports
+
+### Tests
+- `tests/test_session.py` - 24 tests for session management
+- `tests/test_dependencies.py` - 15 tests for AgentDeps
+- Updated `tests/test_runner.py` for new architecture
+
+## Architecture Highlights
+
+### Session Management (OpenClaw-inspired)
+- Sessions stored in SQLite with per-chat isolation
+- Session key format: `agent:<agentId>:<scope>:<chatId>`
+- Session scopes: main, per-peer, per-channel-peer
+
+### Memory Hierarchy (L0/L1/L2)
+- **L0 (abstract)**: One-line summary for quick scanning
+- **L1 (overview)**: 2-3 sentence overview for context
+- **L2 (details)**: Full content for deep retrieval
+
+### Categories
+- System, Environment, Skill, Project, Comm, Security
+
+### FTS5 Search
+- Full-text search on memory entries
+- Category filtering
+- Confidence and access count ranking
+
+## Test Results
+All 57 tests pass:
+- 24 session tests
+- 15 dependencies tests  
+- 3 runner tests
+- 15 other tests
