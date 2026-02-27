@@ -5,7 +5,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from agent.config import LOG_FILE, setup_logging
+from agent.config import LOG_FILE, PROVIDER_DEFAULT, setup_logging
 from agent.session_globals import close_db, get_db
 
 logger = logging.getLogger(__name__)
@@ -15,12 +15,18 @@ VERSION_FILE = Path(__file__).parent.parent.parent / "VERSION"
 VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
 
 
-async def _run_task(task: str) -> None:
-    """Run a task with session support (CLI mode uses chat_id=0)."""
+async def _run_task(task: str, provider: str | None = None) -> None:
+    """Run a task with session support (CLI mode uses chat_id=0).
+    
+    Args:
+        task: Task description
+        provider: 'vllm' or 'openrouter' (default: from config)
+        
+    """
     from agent.core.runner import run_with_retry
 
     try:
-        output = await run_with_retry(task, chat_id=0)
+        output = await run_with_retry(task, chat_id=0, provider=provider)
         print(output)
     finally:
         await close_db()
@@ -118,6 +124,12 @@ def main():
 
     run_p = sub.add_parser("run", help="Выполнить задачу")
     run_p.add_argument("task", help="Описание задачи на естественном языке")
+    run_p.add_argument(
+        "--provider", "-p",
+        choices=["vllm", "openrouter"],
+        default=None,
+        help=f"LLM provider (default: {PROVIDER_DEFAULT}). Use 'vllm' for local, 'openrouter' for cloud.",
+    )
 
     sub.add_parser("bot", help="Запустить Telegram‑бот (long‑polling)")
     sub.add_parser("status", help="Показать статус агента")
@@ -138,15 +150,17 @@ def main():
     setup_logging()
 
     if args.command == "run":
-        asyncio.run(_run_task(args.task))
+        asyncio.run(_run_task(args.task, args.provider))
     elif args.command == "status":
         print(f"Agent status: idle (v{VERSION})")
+        print(f"Default provider: {PROVIDER_DEFAULT}")
         tools = (
             "shell, filesystem, web_search, todo, backup, run_tests, "
             "run_agent_subprocess, git, request_restart, memory"
         )
         print(f"Available tools: {tools}")
         print("Session support: SQLite (data/sessions.db)")
+        print("\nUsage: python -m agent run 'your task' [--provider vllm|openrouter]")
     elif args.command == "version":
         print(f"Shket Research Agent v{VERSION}")
     elif args.command == "memory":
@@ -161,3 +175,4 @@ def main():
     else:
         parser.print_help()
         print(f"\nVersion: {VERSION}")
+        print(f"Default provider: {PROVIDER_DEFAULT}")

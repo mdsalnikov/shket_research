@@ -44,6 +44,7 @@ class AgentDeps:
         current_task: Current task description (runtime state)
         retry_count: Number of retry attempts (runtime state)
         last_error: Last error message (runtime state)
+        memory_l0: Cached L0 memory summary (for system prompt)
 
     """
 
@@ -68,6 +69,9 @@ class AgentDeps:
     current_task: str | None = None
     retry_count: int = 0
     last_error: str | None = None
+    
+    # Memory context (cached for system prompt)
+    memory_l0: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self):
         """Set default API key if not provided."""
@@ -97,12 +101,16 @@ class AgentDeps:
         session_data = await db.get_session(session_id)
         message_count = session_data.get("message_count", 0) if session_data else 0
         
+        # Get L0 memory overview for system prompt
+        memory_l0 = await db.get_l0_overview()
+        
         return cls(
             db=db,
             session_id=session_id,
             chat_id=chat_id,
             session_scope=scope,
             message_count=message_count,
+            memory_l0=memory_l0,
             **kwargs,
         )
 
@@ -231,6 +239,12 @@ class AgentDeps:
             confidence=confidence,
         )
         await self.db.save_memory(entry)
+        
+        # Update cached memory_l0
+        if category not in self.memory_l0:
+            self.memory_l0[category] = []
+        if l0_abstract not in self.memory_l0[category]:
+            self.memory_l0[category].append(l0_abstract)
 
     async def recall_memory(self, key: str) -> MemoryEntry | None:
         """Recall a memory entry by key.
@@ -264,28 +278,13 @@ class AgentDeps:
         return await self.db.search_memory(query, category=category, limit=limit)
 
     async def get_context_summary(self) -> str:
-        """Get L0/L1 memory summary for context injection.
-        
-        This provides a quick overview of all memory, useful for
-        system prompt context injection.
+        """Get L0/L1 memory summary for context.
         
         Returns:
-            Formatted memory summary string
+            Formatted summary string
             
         """
-        # Get L0 overview (quick scan)
-        l0 = await self.db.get_l0_overview()
-
-        if not l0:
-            return ""
-
-        lines = ["## Memory Context (L0)"]
-        for category, summaries in l0.items():
-            lines.append(f"\n### {category}")
-            for summary in summaries[:5]:  # Limit per category
-                lines.append(f"- {summary}")
-
-        return "\n".join(lines)
+        return await self.db.get_context_summary()
 
     async def delete_memory(self, key: str) -> bool:
         """Delete a memory entry.
@@ -299,60 +298,21 @@ class AgentDeps:
         """
         return await self.db.delete_memory(key)
 
+    # ============ Runtime State ============
 
-# Type alias for run context
-DepsContext = RunContext[AgentDeps]
+    def set_task(self, task: str) -> None:
+        """Set current task for reference in error handling."""
+        self.current_task = task
 
+    def increment_retry(self) -> int:
+        """Increment retry counter and return new value."""
+        self.retry_count += 1
+        return self.retry_count
 
-# System prompt generator that includes memory context
-async def get_system_prompt_with_memory(ctx: DepsContext) -> str:
-    """Generate system prompt with injected memory context.
-    
-    Args:
-        ctx: RunContext with AgentDeps
-        
-    Returns:
-        System prompt string with memory context appended
-        
-    """
-    from agent.core.agent import SYSTEM_PROMPT
+    def set_error(self, error: str) -> None:
+        """Set last error message."""
+        self.last_error = error
 
-    # Get memory context
-    memory_context = await ctx.deps.get_context_summary()
-
-    if memory_context:
-        return f"{SYSTEM_PROMPT}\n\n{memory_context}"
-
-    return SYSTEM_PROMPT
-
-
-# Tool context helpers
-def get_deps(ctx: RunContext[AgentDeps]) -> AgentDeps:
-    """Extract dependencies from run context.
-    
-    Args:
-        ctx: RunContext with AgentDeps
-        
-    Returns:
-        AgentDeps instance
-        
-    """
-    return ctx.deps
-
-
-async def log_tool_call(
-    ctx: RunContext[AgentDeps], 
-    tool_name: str, 
-    params: dict | None = None,
-    result: str | None = None,
-) -> None:
-    """Log a tool call to the session.
-    
-    Args:
-        ctx: RunContext with AgentDeps
-        tool_name: Name of the tool
-        params: Tool parameters
-        result: Tool result
-        
-    """
-    await ctx.deps.add_tool_call(tool_name, params, result)
+    def clear_error(self) -> None:
+        """Clear error state."""
+        self.last_error = None

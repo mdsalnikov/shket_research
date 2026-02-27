@@ -32,6 +32,7 @@ async def run_with_retry(
     max_retries: int | None = None,
     chat_id: int = 0,
     deps: AgentDeps | None = None,
+    provider: str | None = None,
 ) -> str:
     """Run agent task with session support and self-healing retries.
 
@@ -46,6 +47,7 @@ async def run_with_retry(
         max_retries: Override config (default: MAX_RETRIES from config).
         chat_id: Chat ID for session isolation (default: 0 for CLI).
         deps: Pre-created dependencies (optional, will create if not provided).
+        provider: 'vllm' or 'openrouter' (default: from config).
 
     Returns:
         Agent output. On failure: meaningful fallback with partial results.
@@ -66,7 +68,7 @@ async def run_with_retry(
     await deps.add_user_message(task)
     
     # Build agent
-    agent = build_session_agent()
+    agent = build_session_agent(provider=provider)
     
     # Create self-healing runner
     healing_runner = SelfHealingRunner(max_retries=n)
@@ -102,6 +104,7 @@ async def run_task_with_session(
     username: str | None = None,
     user_id: int | None = None,
     session_scope: str = "main",
+    provider: str | None = None,
 ) -> str:
     """Run a task with full session management.
 
@@ -120,6 +123,7 @@ async def run_task_with_session(
         username: Optional user display name
         user_id: Optional Telegram user ID
         session_scope: Session scope (main/per-peer/per-channel-peer)
+        provider: 'vllm' or 'openrouter' (default: from config)
 
     Returns:
         Agent response
@@ -139,10 +143,10 @@ async def run_task_with_session(
         session_scope=session_scope,
     )
 
-    return await run_with_retry(task, deps=deps)
+    return await run_with_retry(task, deps=deps, provider=provider)
 
 
-async def run_simple_task(task: str, model_name: str | None = None) -> str:
+async def run_simple_task(task: str, model_name: str | None = None, provider: str | None = None) -> str:
     """Run a simple task without session persistence.
     
     Useful for one-off tasks that don't need session isolation
@@ -151,6 +155,7 @@ async def run_simple_task(task: str, model_name: str | None = None) -> str:
     Args:
         task: Task description
         model_name: Optional model override
+        provider: 'vllm' or 'openrouter' (default: from config)
         
     Returns:
         Agent response
@@ -158,7 +163,7 @@ async def run_simple_task(task: str, model_name: str | None = None) -> str:
     """
     from agent.core.agent import build_agent
 
-    agent = build_agent(model_name=model_name)
+    agent = build_agent(model_name=model_name, provider=provider)
     
     try:
         result = await agent.run(task)
@@ -189,6 +194,7 @@ async def run_with_retry_legacy(
     max_retries: int | None = None,
     chat_id: int = 0,
     deps: AgentDeps | None = None,
+    provider: str | None = None,
 ) -> str:
     """Legacy runner without self-healing (for comparison/testing).
     
@@ -200,6 +206,7 @@ async def run_with_retry_legacy(
         max_retries: Override config (default: MAX_RETRIES from config).
         chat_id: Chat ID for session isolation (default: 0 for CLI).
         deps: Pre-created dependencies (optional, will create if not provided).
+        provider: 'vllm' or 'openrouter' (default: from config).
 
     Returns:
         Agent output. On final failure: error summary with attempt count and last error.
@@ -210,7 +217,7 @@ async def run_with_retry_legacy(
     n = max_retries if max_retries is not None else MAX_RETRIES
     current_task = task
     last_error: Exception | None = None
-    agent = build_session_agent()
+    agent = build_session_agent(provider=provider)
 
     # Create dependencies if not provided
     if deps is None:

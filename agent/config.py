@@ -5,9 +5,33 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ============================================================================
+# API Keys
+# ============================================================================
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TG_BOT_KEY = os.getenv("TG_BOT_KEY", "")
-DEFAULT_MODEL = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
+
+# ============================================================================
+# Provider Configuration
+# ============================================================================
+# Default provider: 'vllm' (local) or 'openrouter' (cloud)
+PROVIDER_DEFAULT = os.getenv("PROVIDER_DEFAULT", "vllm")
+
+# vLLM (local) configuration
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "openai/gpt-oss-120b")
+# vLLM typically doesn't need an API key, but allow one for auth setups
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "not-needed")
+
+# OpenRouter (cloud) configuration
+OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", "openai/gpt-oss-120b")
+
+# Legacy support - maps to appropriate model based on provider
+DEFAULT_MODEL = os.getenv("AGENT_MODEL", VLLM_MODEL_NAME)
+
+# ============================================================================
+# Agent Configuration
+# ============================================================================
 # Max retries when task fails; agent tries to self-heal before giving up
 MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "10"))
 # Project root: directory containing agent/ package (works from any cwd)

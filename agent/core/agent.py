@@ -2,6 +2,10 @@
 
 This module provides the agent builder with Pydantic AI integration,
 SQLite session persistence, and dependency injection.
+
+Supports two providers:
+- vLLM (default): Local OpenAI-compatible API
+- OpenRouter: Cloud API with many models
 """
 
 from __future__ import annotations
@@ -9,10 +13,21 @@ from __future__ import annotations
 import logging
 
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from agent.config import DEFAULT_MODEL, OPENROUTER_API_KEY, VERSION
+from agent.config import (
+    DEFAULT_MODEL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_MODEL_NAME,
+    VLLM_BASE_URL,
+    VLLM_MODEL_NAME,
+    VLLM_API_KEY,
+    PROVIDER_DEFAULT,
+    VERSION,
+)
 from agent.dependencies import AgentDeps
 
 logger = logging.getLogger(__name__)
@@ -104,7 +119,33 @@ Session Management (OpenClaw-inspired):
 """.format(version=VERSION)
 
 
-def build_model(
+def build_vllm_model(
+    model_name: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> OpenAIChatModel:
+    """Build vLLM model instance (OpenAI-compatible local API).
+    
+    Args:
+        model_name: Model identifier (e.g., 'openai/gpt-oss-120b')
+        base_url: vLLM API base URL (default: http://localhost:8000/v1)
+        api_key: API key (usually not needed for vLLM)
+        
+    Returns:
+        Configured OpenAIChatModel instance for vLLM
+        
+    """
+    provider = OpenAIProvider(
+        base_url=base_url or VLLM_BASE_URL,
+        api_key=api_key or VLLM_API_KEY,
+    )
+    return OpenAIChatModel(
+        model_name=model_name or VLLM_MODEL_NAME,
+        provider=provider,
+    )
+
+
+def build_openrouter_model(
     model_name: str | None = None,
     api_key: str | None = None,
 ) -> OpenRouterModel:
@@ -119,9 +160,35 @@ def build_model(
         
     """
     return OpenRouterModel(
-        model_name or DEFAULT_MODEL,
+        model_name=model_name or OPENROUTER_MODEL_NAME,
         provider=OpenRouterProvider(api_key=api_key or OPENROUTER_API_KEY),
     )
+
+
+def build_model(
+    model_name: str | None = None,
+    api_key: str | None = None,
+    provider: str | None = None,
+) -> OpenAIChatModel | OpenRouterModel:
+    """Build model instance based on provider.
+    
+    Args:
+        model_name: Model identifier
+        api_key: API key (provider-specific)
+        provider: 'vllm' or 'openrouter' (default: from config)
+        
+    Returns:
+        Configured model instance
+        
+    """
+    provider = provider or PROVIDER_DEFAULT
+    
+    if provider == "openrouter":
+        logger.info(f"Using OpenRouter provider with model: {model_name or OPENROUTER_MODEL_NAME}")
+        return build_openrouter_model(model_name, api_key)
+    else:
+        logger.info(f"Using vLLM provider at {VLLM_BASE_URL} with model: {model_name or VLLM_MODEL_NAME}")
+        return build_vllm_model(model_name, api_key=api_key)
 
 
 def get_all_tools() -> list:
@@ -176,6 +243,7 @@ def get_all_tools() -> list:
 def build_agent(
     model_name: str | None = None,
     api_key: str | None = None,
+    provider: str | None = None,
 ) -> Agent:
     """Build agent with all tools (legacy mode without dependencies).
     
@@ -184,13 +252,14 @@ def build_agent(
     
     Args:
         model_name: Model identifier
-        api_key: OpenRouter API key
+        api_key: API key
+        provider: 'vllm' or 'openrouter'
         
     Returns:
         Agent instance (without session support)
         
     """
-    model = build_model(model_name, api_key)
+    model = build_model(model_name, api_key, provider)
     tools = get_all_tools()
 
     return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)
@@ -199,6 +268,7 @@ def build_agent(
 def build_session_agent(
     model_name: str | None = None,
     api_key: str | None = None,
+    provider: str | None = None,
 ) -> Agent:
     """Build agent with session support (uses AgentDeps).
 
@@ -214,13 +284,14 @@ def build_session_agent(
     
     Args:
         model_name: Model identifier
-        api_key: OpenRouter API key
+        api_key: API key
+        provider: 'vllm' or 'openrouter'
         
     Returns:
         Agent instance with session support
         
     """
-    model = build_model(model_name, api_key)
+    model = build_model(model_name, api_key, provider)
     tools = get_all_tools()
 
     agent = Agent(
@@ -237,14 +308,19 @@ def build_session_agent(
         Injects L0 memory summary into the system prompt for context
         continuity across sessions.
         """
-        # Try to get memory context if deps available
-        try:
-            memory_context = await ctx.deps.get_context_summary()
-            if memory_context:
-                logger.debug("Injected memory context into system prompt")
-                return f"{SYSTEM_PROMPT}\n\n{memory_context}"
-        except Exception as e:
-            logger.debug(f"Could not get memory context: {e}")
-        return SYSTEM_PROMPT
+        deps = ctx.deps
+        
+        # Build memory context if available
+        memory_context = ""
+        if deps.memory_l0:
+            memory_context = "\n\n## Memory Context (L0)\n\n"
+            for category, summaries in deps.memory_l0.items():
+                if summaries:
+                    memory_context += f"### {category}\n"
+                    for summary in summaries:
+                        memory_context += f"- {summary}\n"
+                    memory_context += "\n"
+        
+        return SYSTEM_PROMPT + memory_context
 
     return agent
