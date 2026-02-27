@@ -28,6 +28,7 @@ BOT_COMMANDS = [
     BotCommand("help", "Список доступных команд"),
     BotCommand("status", "Показать статус агента и время работы"),
     BotCommand("context", "Показать информацию о контексте сессии"),
+    BotCommand("clear", "Очистить контекст сессии"),
     BotCommand("tasks", "Список запущенных задач"),
     BotCommand("logs", "Показать последние N записей лога (по умолчанию 30)"),
     BotCommand("exportlogs", "Скачать полный файл лога"),
@@ -41,6 +42,7 @@ HELP_TEXT = (
     "/help — это справка\n"
     "/status — статус агента и время работы\n"
     "/context — информация о контексте (сообщения, токены)\n"
+    "/clear — очистить контекст сессии\n"
     "/tasks — список запущенных задач\n"
     "/logs \[N] — показать последние N записей лога (по умолчанию 30)\n"
     "/exportlogs — скачать полный файл лога\n"
@@ -139,8 +141,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
-
-
 async def context_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current session context info."""
     from agent.session_globals import get_db
@@ -183,6 +183,33 @@ async def context_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         text += f"\n{role_emoji} _{preview}_"
     
     await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear session context."""
+    from agent.session_globals import get_db
+    
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
+    chat_id = update.effective_chat.id
+    db = await get_db()
+    
+    session_id = await db.get_or_create_session(chat_id)
+    await db.clear_session(session_id)
+    
+    await update.message.reply_text(
+        "✅ *Context Cleared*\n\n"
+        "Session messages deleted.\n"
+        "Session metadata preserved.\n"
+        "Memory intact.",
+        parse_mode="Markdown"
+    )
+
 
 async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -377,6 +404,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("context", context_cmd))
+    app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(CommandHandler("tasks", tasks_cmd))
     app.add_handler(CommandHandler("logs", logs_cmd))
     app.add_handler(CommandHandler("exportlogs", exportlogs_cmd))

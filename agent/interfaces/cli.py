@@ -47,6 +47,16 @@ async def _show_memory_summary() -> None:
         await close_db()
 
 
+async def _clear_context() -> None:
+    """Clear session context (CLI uses chat_id=0)."""
+    try:
+        db = await get_db()
+        session_id = await db.get_or_create_session(0)  # CLI uses chat_id=0
+        await db.clear_session(session_id)
+        print("✅ Context cleared successfully!")
+        print("   Session metadata preserved, messages deleted.")
+    finally:
+        await close_db()
 
 
 async def _show_context() -> None:
@@ -86,6 +96,7 @@ async def _show_context() -> None:
     finally:
         await close_db()
 
+
 def _show_logs(n: int) -> None:
     try:
         with open(LOG_FILE) as f:
@@ -113,6 +124,7 @@ def main():
     sub.add_parser("version", help="Показать версию агента")
     sub.add_parser("memory", help="Показать сводку памяти")
     sub.add_parser("context", help="Показать информацию о контексте сессии")
+    sub.add_parser("clear-context", help="Очистить контекст сессии (удалить сообщения)")
 
     logs_p = sub.add_parser("logs", help="Показать последние записи лога")
     logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
@@ -141,6 +153,8 @@ def main():
         asyncio.run(_show_memory_summary())
     elif args.command == "context":
         asyncio.run(_show_context())
+    elif args.command == "clear-context":
+        asyncio.run(_clear_context())
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
         run_bot()
