@@ -1,8 +1,8 @@
-"""Agent capability tests via OpenRouter (GPT-OSS-120B or Qwen).
+"""Agent capability tests via vLLM (local) or OpenRouter.
 
 Tests verify: shell, filesystem, web search, multi-step tasks.
-Run with: pytest -m agent -v
-Use Qwen: AGENT_TEST_MODEL=qwen/qwen3.5-122b-a10b pytest -m agent -v
+Run with vLLM (localhost): USE_VLLM=1 pytest tests/test_agent_capabilities.py -v
+Run with OpenRouter: pytest -m agent -v (requires OPENROUTER_API_KEY)
 """
 
 import os
@@ -11,24 +11,27 @@ import pytest
 
 from agent.config import PROJECT_ROOT
 
+USE_VLLM = os.getenv("USE_VLLM", "").lower() in ("1", "true", "yes")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TEST_MODEL = os.getenv("AGENT_TEST_MODEL", "openai/gpt-oss-120b")
 
 pytestmark = pytest.mark.agent
 
-skip_no_key = pytest.mark.skipif(
-    not OPENROUTER_API_KEY or OPENROUTER_API_KEY.startswith("your_"),
-    reason="OPENROUTER_API_KEY not set",
+skip_no_backend = pytest.mark.skipif(
+    not USE_VLLM and (not OPENROUTER_API_KEY or OPENROUTER_API_KEY.startswith("your_")),
+    reason="Set USE_VLLM=1 for local vLLM or OPENROUTER_API_KEY for OpenRouter",
 )
 
 
 def _build_agent():
     from agent.core.agent import build_agent
 
+    if USE_VLLM:
+        return build_agent(provider="vllm")
     return build_agent(model_name=TEST_MODEL)
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_shell_command():
     """Agent should execute `echo 42` and include '42' in its answer."""
@@ -40,7 +43,7 @@ async def test_shell_command():
     assert "42" in result.output
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_write_and_run_script():
     """Agent should write a Python script that prints HELLO_SHKET, run it, report output."""
@@ -59,7 +62,7 @@ async def test_write_and_run_script():
             os.remove(script_path)
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_filesystem_read_write():
     """Agent should write 'MAGIC_TOKEN_12345' to a file, read it back, and confirm."""
@@ -76,7 +79,7 @@ async def test_filesystem_read_write():
             os.remove(test_file)
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_web_search():
     """Agent should search for Python programming language and mention it."""
@@ -89,7 +92,7 @@ async def test_web_search():
     assert "python.org" in output
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_git_status():
     """Agent should run git_status and include branch or status in the answer."""
@@ -101,7 +104,7 @@ async def test_git_status():
     assert "branch" in output or "clean" in output or "modified" in output
 
 
-@skip_no_key
+@skip_no_backend
 @pytest.mark.asyncio
 async def test_multi_step_research():
     """Agent should: 1) run `uname -r` to get kernel version, 2) write it to a file,
@@ -124,3 +127,23 @@ async def test_multi_step_research():
     finally:
         if os.path.exists(report_file):
             os.remove(report_file)
+
+
+@skip_no_backend
+@pytest.mark.asyncio
+async def test_message_history_continuity():
+    """With session, second run should see context from first (message_history passed)."""
+    from agent.core.runner import run_with_retry
+    from agent.session_globals import close_db
+
+    try:
+        r1 = await run_with_retry("Reply with exactly: CONTEXT_OK", chat_id=99999, provider="vllm")
+        assert "CONTEXT_OK" in r1
+        r2 = await run_with_retry(
+            "Your previous reply was about CONTEXT. Say exactly: CONTINUITY_OK",
+            chat_id=99999,
+            provider="vllm",
+        )
+        assert "CONTINUITY_OK" in r2
+    finally:
+        await close_db()

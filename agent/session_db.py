@@ -99,6 +99,7 @@ class SessionDB:
                 await self._db.execute("PRAGMA journal_mode=WAL")
                 await self._db.execute("PRAGMA busy_timeout=5000")
                 await self._create_tables()
+                await self._migrate_sessions_message_history()
                 self._initialized = True
                 logger.info("SessionDB initialized at %s", self.db_path)
                 return
@@ -201,6 +202,40 @@ class SessionDB:
                 VALUES (new.id, new.key, new.category, new.l0_abstract, new.l1_overview, new.l2_details);
             END;
         """)
+        await self._db.commit()
+
+    async def _migrate_sessions_message_history(self) -> None:
+        """Add message_history_json column to sessions if missing (for pydantic-ai native history)."""
+        try:
+            await self._db.execute(
+                "ALTER TABLE sessions ADD COLUMN message_history_json TEXT"
+            )
+            await self._db.commit()
+            logger.info("Added sessions.message_history_json column")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+    async def get_model_message_history(self, session_id: int) -> str | None:
+        """Get stored pydantic-ai message history (JSON) for this session."""
+        try:
+            cursor = await self._db.execute(
+                "SELECT message_history_json FROM sessions WHERE id = ?",
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return row["message_history_json"]
+        except (sqlite3.OperationalError, KeyError, IndexError):
+            return None
+
+    async def set_model_message_history(self, session_id: int, json_str: str) -> None:
+        """Store pydantic-ai message history (JSON) for this session."""
+        await self._db.execute(
+            "UPDATE sessions SET message_history_json = ?, updated_at = ? WHERE id = ?",
+            (json_str, time.time(), session_id),
+        )
         await self._db.commit()
 
     def _session_key(

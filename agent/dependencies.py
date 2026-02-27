@@ -204,6 +204,14 @@ class AgentDeps:
         """
         return await self.db.get_conversation_history(self.session_id, limit=limit)
 
+    async def get_model_message_history(self) -> str | None:
+        """Get stored pydantic-ai message history (JSON) for current session."""
+        return await self.db.get_model_message_history(self.session_id)
+
+    async def set_model_message_history(self, json_str: str) -> None:
+        """Store pydantic-ai message history (JSON) for current session."""
+        await self.db.set_model_message_history(self.session_id, json_str)
+
     # ============ Memory Operations ============
 
     async def save_memory(
