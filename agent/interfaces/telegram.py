@@ -14,28 +14,28 @@ logger = logging.getLogger(__name__)
 _start_time = time.time()
 
 BOT_COMMANDS = [
-    BotCommand("start", "Start the bot / show welcome message"),
-    BotCommand("help", "List available commands"),
-    BotCommand("status", "Show agent status and uptime"),
-    BotCommand("tasks", "List running tasks"),
-    BotCommand("logs", "Show last N log entries (default 30)"),
-    BotCommand("exportlogs", "Download full log file"),
-    BotCommand("panic", "Emergency halt — kill all agent processes"),
+    BotCommand("start", "Запустить бота / показать приветствие"),
+    BotCommand("help", "Список доступных команд"),
+    BotCommand("status", "Показать статус агента и время работы"),
+    BotCommand("tasks", "Список запущенных задач"),
+    BotCommand("logs", "Показать последние N записей лога (по умолчанию 30)"),
+    BotCommand("exportlogs", "Скачать полный файл лога"),
+    BotCommand("panic", "Экстренная остановка — завершить все процессы агента"),
 ]
 
 HELP_TEXT = (
     "🤖 *Shket Research Agent*\n\n"
-    "*Commands:*\n"
-    "/start — welcome message\n"
-    "/help — this help\n"
-    "/status — agent status & uptime\n"
-    "/tasks — list running tasks\n"
-    "/logs \\[N] — show last N log entries (default 30)\n"
-    "/exportlogs — download full log file\n"
-    "/panic — emergency halt\n\n"
-    "Send any text message to give the agent a task.\n"
-    "Multiple tasks run concurrently — the bot stays responsive.\n\n"
-    "*Available tools:*\n"
+    "*Команды:*\n"
+    "/start — приветственное сообщение\n"
+    "/help — это справка\n"
+    "/status — статус агента и время работы\n"
+    "/tasks — список запущенных задач\n"
+    "/logs \[N] — показать последние N записей лога (по умолчанию 30)\n"
+    "/exportlogs — скачать полный файл лога\n"
+    "/panic — экстренная остановка\n\n"
+    "Отправьте любой текстовое сообщение, чтобы дать агенту задачу.\n"
+    "Несколько задач могут выполняться одновременно — бот остаётся отзывчивым.\n\n"
+    "*Доступные инструменты:*\n"
     "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
     "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart"
     f"\n\nВерсия: {VERSION}"
@@ -122,7 +122,7 @@ async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
-async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.warning("/panic invoked by %s", update.effective_user.id)
     await update.message.reply_text("🛑 PANIC: halting all agent processes.")
     os._exit(1)

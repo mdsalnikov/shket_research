@@ -29,18 +29,18 @@ def _show_logs(n: int) -> None:
 def main():
     parser = argparse.ArgumentParser(
         prog="python -m agent",
-        description="Shket Research Agent — autonomous LLM agent for Ubuntu server",
+        description="Shket Research Agent — автономный LLM‑агент для Ubuntu‑сервера",
     )
     sub = parser.add_subparsers(dest="command")
 
-    run_p = sub.add_parser("run", help="Execute a task")
-    run_p.add_argument("task", help="Task description in natural language")
+    run_p = sub.add_parser("run", help="Выполнить задачу")
+    run_p.add_argument("task", help="Описание задачи на естественном языке")
 
-    sub.add_parser("bot", help="Start the Telegram bot (long-polling)")
-    sub.add_parser("status", help="Show agent status")
+    sub.add_parser("bot", help="Запустить Telegram‑бот (long‑polling)")
+    sub.add_parser("status", help="Показать статус агента")
 
-    logs_p = sub.add_parser("logs", help="Show recent log entries")
-    logs_p.add_argument("n", nargs="?", type=int, default=30, help="Number of lines (default 30)")
+    logs_p = sub.add_parser("logs", help="Показать последние записи лога")
+    logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
 
     args = parser.parse_args()
 
