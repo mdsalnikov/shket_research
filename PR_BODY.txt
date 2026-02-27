@@ -1,0 +1,4 @@
+Improved CLI implementation to properly handle status and run commands.
+Fixed indentation errors.
+Added basic log and memory stubs.
+Bumped version to 0.3.7.
