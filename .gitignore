@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 logs/
+.agent_todo.json
+.backup_*/
