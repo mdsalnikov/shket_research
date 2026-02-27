@@ -232,6 +232,19 @@ async def test_clear_session(session_db):
     assert session["message_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_model_message_history_storage(session_db):
+    """Test get/set of pydantic-ai native message history (JSON)."""
+    session_id = await session_db.get_or_create_session(12345)
+    assert await session_db.get_model_message_history(session_id) is None
+    await session_db.set_model_message_history(session_id, "[]")
+    raw = await session_db.get_model_message_history(session_id)
+    assert raw == "[]"
+    await session_db.set_model_message_history(session_id, '[{"kind":"request"}]')
+    raw = await session_db.get_model_message_history(session_id)
+    assert "request" in raw
+
+
 # ============ Memory Tests ============
 
 @pytest.mark.asyncio

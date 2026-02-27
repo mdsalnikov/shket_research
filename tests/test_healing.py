@@ -353,17 +353,20 @@ async def test_runner_success_first_try():
     mock_agent = AsyncMock()
     mock_result = MagicMock()
     mock_result.output = "success"
+    mock_result.new_messages = MagicMock(return_value=[])
     mock_agent.run.return_value = mock_result
-    
+
     mock_deps = AsyncMock()
     mock_deps.add_assistant_message = AsyncMock()
-    
+    mock_deps.get_model_message_history = AsyncMock(return_value=None)
+    mock_deps.set_model_message_history = AsyncMock()
+
     result, success = await runner.run(
         agent=mock_agent,
         task="test task",
         deps=mock_deps,
     )
-    
+
     assert success is True
     assert result == "success"
     assert mock_agent.run.call_count == 1
@@ -381,17 +384,20 @@ async def test_runner_retries_retryable_error():
         ValueError("some error"),  # Recoverable error
         mock_result,
     ]
-    
+    mock_result.new_messages = MagicMock(return_value=[])
+
     mock_deps = AsyncMock()
     mock_deps.add_assistant_message = AsyncMock()
     mock_deps.get_conversation_history = AsyncMock(return_value=[])
-    
+    mock_deps.get_model_message_history = AsyncMock(return_value=None)
+    mock_deps.set_model_message_history = AsyncMock()
+
     result, success = await runner.run(
         agent=mock_agent,
         task="test task",
         deps=mock_deps,
     )
-    
+
     assert success is True
     assert result == "recovered"
     assert mock_agent.run.call_count == 2
@@ -404,17 +410,19 @@ async def test_runner_aborts_on_usage_limit():
     
     mock_agent = AsyncMock()
     mock_agent.run.side_effect = ValueError("usage limit exceeded")
-    
+
     mock_deps = AsyncMock()
     mock_deps.add_assistant_message = AsyncMock()
     mock_deps.get_conversation_history = AsyncMock(return_value=[])
-    
+    mock_deps.get_model_message_history = AsyncMock(return_value=None)
+    mock_deps.set_model_message_history = AsyncMock()
+
     result, success = await runner.run(
         agent=mock_agent,
         task="test task",
         deps=mock_deps,
     )
-    
+
     # Should not retry - just return fallback
     assert success is False
     assert "лимит" in result.lower() or "limit" in result.lower()
@@ -457,16 +465,19 @@ async def test_run_with_retry_with_healing():
         mock_agent = AsyncMock()
         mock_result = MagicMock()
         mock_result.output = "done"
+        mock_result.new_messages = MagicMock(return_value=[])
         mock_agent.run.return_value = mock_result
         mock_build.return_value = mock_agent
-        
+
         with patch("agent.core.runner.AgentDeps") as mock_deps_class:
             mock_deps = AsyncMock()
             mock_deps.add_user_message = AsyncMock()
             mock_deps.add_assistant_message = AsyncMock()
             mock_deps.get_conversation_history = AsyncMock(return_value=[])
+            mock_deps.get_model_message_history = AsyncMock(return_value=None)
+            mock_deps.set_model_message_history = AsyncMock()
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
-            
+
             out = await run_with_retry("task", max_retries=3)
             assert out == "done"
             assert mock_agent.run.call_count == 1
@@ -487,8 +498,10 @@ async def test_run_with_retry_non_retryable_error():
             mock_deps.add_user_message = AsyncMock()
             mock_deps.add_assistant_message = AsyncMock()
             mock_deps.get_conversation_history = AsyncMock(return_value=[])
+            mock_deps.get_model_message_history = AsyncMock(return_value=None)
+            mock_deps.set_model_message_history = AsyncMock()
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
-            
+
             out = await run_with_retry("task", max_retries=5)
             # Should not waste retries on usage limit
             assert "лимит" in out.lower() or "limit" in out.lower()

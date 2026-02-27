@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable, Awaitable
 
+from pydantic_ai import ModelMessagesTypeAdapter
+
 from agent.healing.classifier import (
     ErrorClassifier,
     ErrorType,
@@ -26,6 +28,45 @@ from agent.healing.fallback import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Max message history entries to pass to the model (avoids context overflow)
+MAX_MESSAGE_HISTORY = 40
+
+
+async def _load_message_history(deps: Any) -> list | None:
+    """Load pydantic-ai message history for context continuity. Returns None if empty."""
+    if not hasattr(deps, "get_model_message_history"):
+        return None
+    try:
+        raw = await deps.get_model_message_history()
+        if not raw or not raw.strip():
+            return None
+        history = ModelMessagesTypeAdapter.validate_json(raw)
+        if not history:
+            return None
+        if len(history) > MAX_MESSAGE_HISTORY:
+            return history[-MAX_MESSAGE_HISTORY:]
+        return history
+    except Exception as e:
+        logger.debug("Could not load message history: %s", e)
+        return None
+
+
+async def _save_message_history(deps: Any, result: Any, previous: list | None) -> None:
+    """Append run's new messages to stored history and persist."""
+    if not hasattr(deps, "set_model_message_history"):
+        return
+    try:
+        new_msgs = result.new_messages()
+        if not new_msgs:
+            return
+        full = (previous or []) + list(new_msgs)
+        if len(full) > MAX_MESSAGE_HISTORY:
+            full = full[-MAX_MESSAGE_HISTORY:]
+        json_bytes = ModelMessagesTypeAdapter.dump_json(full)
+        await deps.set_model_message_history(json_bytes.decode("utf-8"))
+    except Exception as e:
+        logger.warning("Could not save message history: %s", e)
 
 
 class HealingAction(Enum):
@@ -386,12 +427,15 @@ class SelfHealingRunner:
                 
                 try:
                     logger.info(f"Running task (attempt {attempt + 1}/{n})")
-                    result = await agent.run(current_task, deps=deps)
-                    
-                    # Log assistant response
+                    message_history = await _load_message_history(deps)
+                    result = await agent.run(
+                        current_task,
+                        deps=deps,
+                        message_history=message_history,
+                    )
+                    await _save_message_history(deps, result, message_history)
                     await deps.add_assistant_message(result.output)
                     captured.assistant_messages.append(result.output)
-                    
                     logger.info("Task completed successfully")
                     return result.output, True
                 
