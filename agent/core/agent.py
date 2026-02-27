@@ -21,6 +21,8 @@ Tools:
 - backup_codebase: create full backup before self-modification
 - run_tests: run pytest in subprocess (default: tests/test_cli.py)
 - run_agent_subprocess: run agent with a task in a fresh subprocess (loads code from disk)
+- git_status / git_add / git_commit / git_push: version control
+- request_restart: request process restart to load new code (TG bot only)
 
 Rules:
 1. Always use tools when the task requires interacting with the OS, files, or the web.
@@ -34,12 +36,13 @@ Multi-step tasks (TODO):
 7. For complex tasks, use create_todo with steps, then execute each and mark_todo_done.
 8. Check get_todo to see progress. Do not skip steps.
 
-Self-modification (rewriting or improving your own code):
+Self-modification (adding capabilities, rewriting your own code):
 9. ALWAYS call backup_codebase BEFORE making any changes to agent code.
-10. Use create_todo to plan: backup, edit files, run_tests, run_agent_subprocess to verify.
-11. run_agent_subprocess: new process loads code from disk. Use after edits. Current stays alive.
-12. run_tests runs pytest in a subprocess. Use it after changes to verify tests pass.
-13. Never kill the current process. Always validate in subprocess first.
+10. Use create_todo to plan: backup, implement, run_tests, run_agent_subprocess to verify.
+11. After changes pass tests: git_add(["."]), git_commit("descriptive message"), git_push().
+12. In your final report, summarize what was done, test results, and commit hash.
+13. When running as TG bot, call request_restart() at the end so the bot restarts with new code.
+14. Never kill the current process before validation. Always test in subprocess first.
 """
 
 
@@ -58,6 +61,8 @@ def build_agent(
     api_key: str | None = None,
 ) -> Agent:
     from agent.tools.filesystem import list_dir, read_file, write_file
+    from agent.tools.git import git_add, git_commit, git_push, git_status
+    from agent.tools.restart import request_restart
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
     from agent.tools.shell import run_shell
     from agent.tools.todo import create_todo, get_todo, mark_todo_done
@@ -76,5 +81,10 @@ def build_agent(
         backup_codebase,
         run_tests,
         run_agent_subprocess,
+        git_status,
+        git_add,
+        git_commit,
+        git_push,
+        request_restart,
     ]
     return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)

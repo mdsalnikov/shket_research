@@ -89,6 +89,18 @@ async def test_web_search():
 
 @skip_no_key
 @pytest.mark.asyncio
+async def test_git_status():
+    """Agent should run git_status and include branch or status in the answer."""
+    agent = _build_agent()
+    result = await agent.run(
+        "Run git_status and tell me the current branch or status."
+    )
+    output = result.output.lower()
+    assert "branch" in output or "clean" in output or "modified" in output
+
+
+@skip_no_key
+@pytest.mark.asyncio
 async def test_multi_step_research():
     """Agent should: 1) run `uname -r` to get kernel version, 2) write it to a file,
     3) read the file back, 4) include the kernel version in the answer."""
