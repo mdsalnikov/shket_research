@@ -2,6 +2,10 @@
 .env
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
 logs/
 .agent_todo.json
 .backup_*/
