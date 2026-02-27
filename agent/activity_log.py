@@ -76,9 +76,11 @@ class ToolCallLogger:
         params_str = ""
         if self.params:
             if isinstance(self.params, dict):
-                params_str = " | " + ", ".join(f"{k}={_truncate(str(v), 100)}" for k, v in self.params.items())
+                # Increase per-param truncation to 300 chars for better visibility
+                params_str = " | " + ", ".join(f"{k}={_truncate(str(v), 300)}" for k, v in self.params.items())
             else:
-                params_str = f" | {_truncate(str(self.params), 200)}"
+                # Show up to 2000 characters of raw params
+                params_str = f" | {_truncate(str(self.params), 2000)}"
         with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"{_timestamp()} | 🔧 {self.tool_name}{params_str}\n")
         return self
@@ -87,14 +89,15 @@ class ToolCallLogger:
         duration = time.time() - self.start_time
         if exc_type:
             with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{_timestamp()} | ❌ {self.tool_name} → ERROR: {_truncate(str(exc_val), 200)} ({duration:.2f}s)\n")
+                f.write(f"{_timestamp()} | ❌ {self.tool_name} → ERROR: {_truncate(str(exc_val), 2000)} ({duration:.2f}s)\n")
         return False  # Don't suppress exceptions
 
     def log_result(self, result: str) -> None:
         """Log successful result."""
         duration = time.time() - self.start_time
+        # Show up to 3000 characters of result for detailed debugging
         with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{_timestamp()} | ✅ {self.tool_name} → {_truncate(result, 200)} ({duration:.2f}s)\n")
+            f.write(f"{_timestamp()} | ✅ {self.tool_name} → {_truncate(result, 3000)} ({duration:.2f}s)\n")
 
 
 def log_tool_call(tool_name: str, params: str | None = None) -> ToolCallLogger:

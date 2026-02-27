@@ -192,7 +192,19 @@ async def run_agent_subprocess(task: str) -> str:
     """
     with log_tool_call("run_agent_subprocess", task[:50]) as tool_log:
         logger.info("Tool run_agent_subprocess: %s", task[:80])
-        cmd = [_python(), "-m", "agent", "run", task]
+        # Determine appropriate command based on requested task.
+        # If the user asks for the CLI status command (e.g., "run status"),
+        # we invoke the status subcommand directly to avoid unnecessary LLM calls.
+        task_clean = task.strip()
+        if task_clean == "run status":
+            cmd = [_python(), "-m", "agent", "status"]
+        elif task_clean.startswith("run "):
+            # Run a natural‑language task via the agent's "run" entry point.
+            actual_task = task_clean[4:].strip()
+            cmd = [_python(), "-m", "agent", "run", actual_task]
+        else:
+            # Directly invoke any other subcommand (e.g., "status", "memory").
+            cmd = [_python(), "-m", "agent", task_clean]
         try:
             code, out = await _run_subprocess(cmd, TIMEOUT_AGENT)
             tool_log.log_result(f"exit={code}")
