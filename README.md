@@ -86,6 +86,7 @@ python -m agent <command> [args]
 | `run "task"` | Execute a task described in natural language |
 | `bot` | Start the Telegram bot (long-polling mode) |
 | `status` | Show agent status |
+| `logs [N]` | Show last N log entries (default 30) |
 
 **Examples:**
 
@@ -98,6 +99,9 @@ python -m agent bot
 
 # Check status
 python -m agent status
+
+# Show last 50 log entries
+python -m agent logs 50
 ```
 
 ### Telegram Bot
@@ -112,6 +116,8 @@ Start the bot with `python -m agent bot`, then interact via Telegram.
 | `/help` | List available commands and tools |
 | `/status` | Show agent status and uptime |
 | `/tasks` | List currently running tasks |
+| `/logs [N]` | Show last N log entries (default 30) |
+| `/exportlogs` | Download full log file |
 | `/panic` | 🛑 Emergency halt — immediately kill all agent processes |
 
 Any text message (not a command) is treated as a task for the agent. Tasks run asynchronously — the bot stays responsive while tasks execute, and you can send multiple tasks in parallel.

@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import logging
 
+from agent.config import LOG_FILE, setup_logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,6 +13,19 @@ async def _run_task(task: str) -> None:
     agent = build_agent()
     result = await agent.run(task)
     print(result.output)
+
+
+def _show_logs(n: int) -> None:
+    try:
+        with open(LOG_FILE) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"Log file not found: {LOG_FILE}")
+        return
+    tail = lines[-n:] if len(lines) > n else lines
+    print(f"--- last {len(tail)} of {len(lines)} log entries ---")
+    for line in tail:
+        print(line, end="")
 
 
 def main():
@@ -26,12 +41,16 @@ def main():
     sub.add_parser("bot", help="Start the Telegram bot (long-polling)")
     sub.add_parser("status", help="Show agent status")
 
+    logs_p = sub.add_parser("logs", help="Show recent log entries")
+    logs_p.add_argument("n", nargs="?", type=int, default=30, help="Number of lines (default 30)")
+
     args = parser.parse_args()
 
-    logging.basicConfig(
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        level=logging.INFO,
-    )
+    if args.command == "logs":
+        _show_logs(args.n)
+        return
+
+    setup_logging()
 
     if args.command == "run":
         asyncio.run(_run_task(args.task))

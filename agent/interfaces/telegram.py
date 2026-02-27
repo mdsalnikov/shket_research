@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-from agent.config import TG_BOT_KEY
+from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,8 @@ BOT_COMMANDS = [
     BotCommand("help", "List available commands"),
     BotCommand("status", "Show agent status and uptime"),
     BotCommand("tasks", "List running tasks"),
+    BotCommand("logs", "Show last N log entries (default 30)"),
+    BotCommand("exportlogs", "Download full log file"),
     BotCommand("panic", "Emergency halt — kill all agent processes"),
 ]
 
@@ -28,6 +30,8 @@ HELP_TEXT = (
     "/help — this help\n"
     "/status — agent status & uptime\n"
     "/tasks — list running tasks\n"
+    "/logs \\[N] — show last N log entries (default 30)\n"
+    "/exportlogs — download full log file\n"
     "/panic — emergency halt\n\n"
     "Send any text message to give the agent a task.\n"
     "Multiple tasks run concurrently — the bot stays responsive.\n\n"
@@ -84,6 +88,40 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("📋 Active tasks:\n" + "\n".join(lines))
 
 
+async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    n = 30
+    if context.args:
+        try:
+            n = int(context.args[0])
+        except ValueError:
+            pass
+
+    try:
+        with open(LOG_FILE) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        await update.message.reply_text("Log file not found.")
+        return
+
+    tail = lines[-n:] if len(lines) > n else lines
+    header = f"📜 Last {len(tail)} of {len(lines)} log entries:\n\n"
+    text = header + "".join(tail)
+    if len(text) > 4096:
+        text = text[:4090] + "\n…"
+    await update.message.reply_text(text)
+
+
+async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not os.path.exists(LOG_FILE):
+        await update.message.reply_text("Log file not found.")
+        return
+    await update.message.reply_document(
+        document=open(LOG_FILE, "rb"),
+        filename="agent.log",
+        caption="📜 Full agent log",
+    )
+
+
 async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.warning("/panic invoked by %s", update.effective_user.id)
     await update.message.reply_text("🛑 PANIC: halting all agent processes.")
@@ -133,10 +171,7 @@ def run_bot() -> None:
     if not token or token.startswith("your_"):
         raise SystemExit("TG_BOT_KEY is not configured. Set it in .env or environment.")
 
-    logging.basicConfig(
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        level=logging.INFO,
-    )
+    setup_logging()
 
     app = (
         ApplicationBuilder()
@@ -149,6 +184,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("tasks", tasks_cmd))
+    app.add_handler(CommandHandler("logs", logs_cmd))
+    app.add_handler(CommandHandler("exportlogs", exportlogs_cmd))
     app.add_handler(CommandHandler("panic", panic))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
