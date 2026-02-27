@@ -28,7 +28,7 @@ HELP_TEXT = (
     "Send any text message to give the agent a task.\n\n"
     "*Available tools:*\n"
     "🐚 Shell — execute OS commands\n"
-    "🌐 Browser — headless web browsing\n"
+    "🌐 Web search — search the internet\n"
     "📁 Filesystem — read / write / list files\n"
     "🔍 Deep Research — multi-step web research"
 )
@@ -36,8 +36,7 @@ HELP_TEXT = (
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🤖 Shket Research Agent online.\n"
-        "Send me a task or type /help for commands."
+        "🤖 Shket Research Agent online.\nSend me a task or type /help for commands."
     )
 
 
@@ -50,9 +49,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
     await update.message.reply_text(
-        f"✅ Agent is running\n"
-        f"⏱ Uptime: {h}h {m}m {s}s\n"
-        f"🧠 Agent core: scaffold (not yet implemented)"
+        f"✅ Agent is running\n⏱ Uptime: {h}h {m}m {s}s"
     )
 
 
@@ -65,7 +62,20 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
     logger.info("Task from %s: %s", update.effective_user.id, text)
-    reply = f"📝 Task received: {text}\nAgent core not yet implemented — scaffold only."
+    await update.message.reply_text("⏳ Working on it…")
+
+    try:
+        from agent.core.agent import build_agent
+
+        agent = build_agent()
+        result = await agent.run(text)
+        reply = result.output
+    except Exception as e:
+        logger.exception("Agent error")
+        reply = f"❌ Error: {e}"
+
+    if len(reply) > 4096:
+        reply = reply[:4090] + "\n…"
     await update.message.reply_text(reply)
 
 

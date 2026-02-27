@@ -1,7 +1,16 @@
 import argparse
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_task(task: str) -> None:
+    from agent.core.agent import build_agent
+
+    agent = build_agent()
+    result = await agent.run(task)
+    print(result.output)
 
 
 def main():
@@ -19,14 +28,16 @@ def main():
 
     args = parser.parse_args()
 
+    logging.basicConfig(
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        level=logging.INFO,
+    )
+
     if args.command == "run":
-        logger.info("Received task: %s", args.task)
-        print(f"Agent received task: {args.task}")
-        print("Agent core not yet implemented — scaffold only.")
+        asyncio.run(_run_task(args.task))
     elif args.command == "status":
         print("Agent status: idle")
-        print("Agent core: scaffold (not yet implemented)")
-        print("Available tools: shell, browser, filesystem")
+        print("Available tools: shell, browser, filesystem, web_search")
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
 
