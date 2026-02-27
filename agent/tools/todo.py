@@ -6,9 +6,22 @@ import json
 import logging
 import os
 
+from agent.config import LOG_FILE, PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-TODO_FILE = "/workspace/.agent_todo.json"
+TODO_FILE = os.path.join(PROJECT_ROOT, ".agent_todo.json")
+
+
+def _log_todo(content: str) -> None:
+    """Log full TODO to agent log file."""
+    logger.info("TODO: %s", content.replace("\n", " | "))
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[TODO] {content}\n")
+    except Exception:
+        pass
 
 
 def _load() -> dict:
@@ -33,7 +46,9 @@ async def create_todo(tasks: list[str]) -> str:
     data = {"tasks": tasks, "done": []}
     _save(data)
     lines = [f"{i+1}. [ ] {t}" for i, t in enumerate(tasks)]
-    return "TODO created:\n" + "\n".join(lines)
+    full = "TODO created:\n" + "\n".join(lines)
+    _log_todo(full)
+    return full
 
 
 async def get_todo() -> str:
@@ -45,7 +60,9 @@ async def get_todo() -> str:
     if not tasks:
         return "No TODO list. Use create_todo to start one."
     lines = [f"{i+1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
-    return "TODO:\n" + "\n".join(lines)
+    full = "TODO:\n" + "\n".join(lines)
+    _log_todo(full)
+    return full
 
 
 async def mark_todo_done(step_index: int) -> str:
@@ -65,4 +82,6 @@ async def mark_todo_done(step_index: int) -> str:
     data["done"] = sorted(done)
     _save(data)
     remaining = len(tasks) - len(done)
+    lines = [f"{i+1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
+    _log_todo("TODO:\n" + "\n".join(lines))
     return f"Step {step_index} marked done. {remaining} steps remaining."

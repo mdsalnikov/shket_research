@@ -8,11 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_task(task: str) -> None:
-    from agent.core.agent import build_agent
+    from agent.core.runner import run_with_retry
 
-    agent = build_agent()
-    result = await agent.run(task)
-    print(result.output)
+    output = await run_with_retry(task)
+    print(output)
 
 
 def _show_logs(n: int) -> None:

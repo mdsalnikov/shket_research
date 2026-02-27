@@ -9,3 +9,5 @@ build/
 logs/
 .agent_todo.json
 .backup_*/
+GHTOKEN.txt
+.gh_token

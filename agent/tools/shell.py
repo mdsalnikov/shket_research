@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from agent.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 30
@@ -20,7 +22,7 @@ async def run_shell(command: str) -> str:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd="/workspace",
+            cwd=PROJECT_ROOT,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
         output = stdout.decode(errors="replace").strip()

@@ -1,9 +1,11 @@
 """Tests for git tools."""
 
 import os
+import subprocess
 
 import pytest
 
+from agent.config import PROJECT_ROOT
 from agent.tools.git import git_add, git_status
 
 
@@ -19,17 +21,16 @@ async def test_git_status():
 @pytest.mark.asyncio
 async def test_git_add():
     """git_add stages a file."""
-    test_file = "/workspace/tmp_git_test_add.txt"
+    test_file = os.path.join(PROJECT_ROOT, "tmp_git_test_add.txt")
     with open(test_file, "w") as f:
         f.write("test")
     try:
         out = await git_add(["tmp_git_test_add.txt"])
         assert "Staged" in out or "error" not in out.lower()
     finally:
-        os.remove(test_file)
-        import subprocess
-
+        if os.path.exists(test_file):
+            os.remove(test_file)
         subprocess.run(
-            ["git", "-C", "/workspace", "restore", "--staged", "tmp_git_test_add.txt"],
+            ["git", "-C", PROJECT_ROOT, "restore", "--staged", "tmp_git_test_add.txt"],
             capture_output=True,
         )

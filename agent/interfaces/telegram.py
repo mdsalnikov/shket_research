@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging
+from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging, VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ HELP_TEXT = (
     "*Available tools:*\n"
     "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
     "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart"
+    f"\n\nВерсия: {VERSION}"
 )
 
 
@@ -129,11 +130,9 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _run_agent_task(task_id: int, text: str, chat_id: int, bot) -> None:
     try:
-        from agent.core.agent import build_agent
+        from agent.core.runner import run_with_retry
 
-        agent = build_agent()
-        result = await agent.run(text)
-        reply = result.output
+        reply = await run_with_retry(text)
     except Exception as e:
         logger.exception("Agent error for task #%d", task_id)
         reply = f"❌ Error: {e}"

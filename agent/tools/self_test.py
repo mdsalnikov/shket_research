@@ -8,15 +8,17 @@ import os
 import shutil
 import time
 
+from agent.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-WORKSPACE = "/workspace"
-VENV_PYTHON = os.path.join(WORKSPACE, ".venv", "bin", "python")
+VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "bin", "python")
 TIMEOUT_TESTS = 120
 TIMEOUT_AGENT = 90
+TIMEOUT_BACKUP = 60
 MAX_OUTPUT_LEN = 6000
 
-_BACKUP_IGNORE = (".venv", "__pycache__", ".git")
+_BACKUP_IGNORE = (".venv", "__pycache__", ".git", "logs")
 
 
 def _ignore_backup(_d: str, names: list[str]) -> list[str]:
@@ -30,7 +32,7 @@ def _python() -> str:
 async def _run_subprocess(cmd: list[str], timeout: int, env: dict | None = None) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        cwd=WORKSPACE,
+        cwd=PROJECT_ROOT,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env=env or os.environ,
@@ -46,13 +48,22 @@ async def backup_codebase() -> str:
     """Create a full backup of the current codebase before self-modification.
 
     Use this BEFORE any changes to agent code. Backup is saved to .backup_YYYYMMDD_HHMMSS/.
+    Runs with 60s timeout to avoid hanging.
     """
     logger.info("Tool backup_codebase")
     ts = time.strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(WORKSPACE, f".backup_{ts}")
+    dest = os.path.join(PROJECT_ROOT, f".backup_{ts}")
+
+    def _do_backup() -> None:
+        shutil.copytree(PROJECT_ROOT, dest, ignore=_ignore_backup, dirs_exist_ok=False)
+
     try:
-        shutil.copytree(WORKSPACE, dest, ignore=_ignore_backup, dirs_exist_ok=False)
+        await asyncio.wait_for(asyncio.to_thread(_do_backup), timeout=TIMEOUT_BACKUP)
         return f"Backup created at {dest}"
+    except asyncio.TimeoutError:
+        if os.path.exists(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+        return f"error: backup timed out after {TIMEOUT_BACKUP}s"
     except Exception as e:
         return f"error: {e}"
 

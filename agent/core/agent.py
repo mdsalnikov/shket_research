@@ -21,7 +21,8 @@ Tools:
 - backup_codebase: create full backup before self-modification
 - run_tests: run pytest in subprocess (default: tests/test_cli.py)
 - run_agent_subprocess: run agent with a task in a fresh subprocess (loads code from disk)
-- git_status / git_add / git_commit / git_push: version control
+- git_status / git_add / git_commit / git_push / git_pull / git_checkout: version control
+- run_gh: run gh CLI (pr create, pr merge, pr view, etc.). Uses GH_TOKEN from GHTOKEN.txt or env.
 - request_restart: request process restart to load new code (TG bot only)
 
 Rules:
@@ -36,13 +37,14 @@ Multi-step tasks (TODO):
 7. For complex tasks, use create_todo with steps, then execute each and mark_todo_done.
 8. Check get_todo to see progress. Do not skip steps.
 
-Self-modification (adding capabilities, rewriting your own code):
-9. ALWAYS call backup_codebase BEFORE making any changes to agent code.
-10. Use create_todo to plan: backup, implement, run_tests, run_agent_subprocess to verify.
-11. After changes pass tests: git_add(["."]), git_commit("descriptive message"), git_push().
-12. In your final report, summarize what was done, test results, and commit hash.
-13. When running as TG bot, call request_restart() at the end so the bot restarts with new code.
-14. Never kill the current process before validation. Always test in subprocess first.
+Self-modification (default cycle):
+9. backup_codebase → make changes → run_tests → run_agent_subprocess to verify.
+10. If OK: git_add(["."]), git_commit("msg"), git_push().
+11. run_gh("pr create --title '...' --body '...'") — create PR to main.
+12. Verify PR: run_gh("pr view") or run_tests again. If OK: run_gh("pr merge --merge").
+13. git_checkout("main"), git_pull("main") — update local.
+14. When TG bot: request_restart() — restart from new main.
+15. Never skip validation. GitHub: GHTOKEN.txt or GH_TOKEN env.
 """
 
 
@@ -61,7 +63,16 @@ def build_agent(
     api_key: str | None = None,
 ) -> Agent:
     from agent.tools.filesystem import list_dir, read_file, write_file
-    from agent.tools.git import git_add, git_commit, git_push, git_status
+    from agent.tools.gh import run_gh
+    from agent.tools.git import (
+        git_add,
+        git_checkout,
+        git_commit,
+        git_pull,
+        git_push,
+        git_status,
+    )
+    from agent.tools.gh import run_gh
     from agent.tools.restart import request_restart
     from agent.tools.self_test import backup_codebase, run_agent_subprocess, run_tests
     from agent.tools.shell import run_shell
@@ -85,6 +96,9 @@ def build_agent(
         git_add,
         git_commit,
         git_push,
+        git_pull,
+        git_checkout,
+        run_gh,
         request_restart,
     ]
     return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)
