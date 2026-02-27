@@ -7,7 +7,7 @@ intelligent self-healing error recovery.
 Self-healing features:
 - Error classification (recoverable vs context_overflow vs fatal)
 - Context compression for overflow errors
-- Graceful fallback generation
+- Graceful fallback generation from partial results
 - Smart retry counting (non-retryable errors don't waste attempts)
 '''
 
@@ -41,7 +41,7 @@ async def run_with_retry(
     - Context compression for overflow errors
     - Graceful fallback generation
     - Smart retry counting (non-retryable errors don't waste attempts)
-
+    
     Args:
         task: Initial task description.
         max_retries: Override config (default: MAX_RETRIES from config).
@@ -53,8 +53,10 @@ async def run_with_retry(
         Agent output as a string. On failure: meaningful fallback with partial results.
     """
     # --- Special built‑in tasks ------------------------------------------------
-    # Recognize direct "status" or "run status" commands to avoid LLM calls.
-    if task.strip().lower() in ("status", "run status") or task.strip().lower().endswith(" status"):
+    # Accept both "status" and commands like "run status".
+    cleaned = task.strip().lower()
+    if cleaned == "status" or cleaned.startswith("run ") and cleaned.endswith(" status"):
+        # Provide a concise status string without invoking LLM or session DB.
         tools = (
             "shell, filesystem, web_search, todo, backup, run_tests, "
             "run_agent_subprocess, git, request_restart, memory"
@@ -80,32 +82,37 @@ async def run_with_retry(
     # Build agent
     agent = build_session_agent(provider=provider)
 
-    # Create self‑healing runner
+    # Create self-healing runner
     healing_runner = SelfHealingRunner(max_retries=n)
 
     try:
-        # Run with self‑healing
+        # Run with self-healing
         result, success = await healing_runner.run(
             agent=agent,
             task=task,
             deps=deps,
             max_retries=n,
         )
+
         # Record the assistant's reply in the session history for continuity.
         if success:
-            output = result.output if hasattr(result, "output") else str(result)
-            await deps.add_assistant_message(output)
+            # Successful run – store the final output
+            output_text = getattr(result, "output", None) if not isinstance(result, str) else result
+            await deps.add_assistant_message(output_text)
             logger.info("Task completed successfully")
-            return output
+            return output_text
         else:
-            if hasattr(result, "output"):
-                await deps.add_assistant_message(result.output)
-                return result.output
+            # Fallback case – store whatever partial output exists, if any
+            if isinstance(result, str):
+                output_text = result
+            elif hasattr(result, "output"):
+                output_text = result.output
             else:
-                fallback_msg = str(result)
-                await deps.add_assistant_message(fallback_msg)
-                return fallback_msg
+                output_text = str(result)
+            await deps.add_assistant_message(output_text)
+            return output_text
     except Exception as e:
+        # Last-resort error handling
         logger.error(f"Unexpected error in runner: {e}")
         fallback = FallbackHandler()
         return fallback.generate_from_error(e, attempt_count=1)
@@ -124,7 +131,7 @@ async def run_task_with_session(
     This is the preferred entry point for running agent tasks with
     SQLite session persistence and memory support.
 
-    OpenClaw‑inspired architecture:
+    OpenClaw-inspired architecture:
     - Sessions are isolated per chat_id and scope
     - Conversation history is persisted in SQLite
     - Memory (L0/L1/L2) is available across sessions
@@ -142,17 +149,15 @@ async def run_task_with_session(
 
 async def run_simple_task(task: str, model_name: str | None = None, provider: str | None = None) -> str:
     """Run a simple task without session persistence.
-
-    Useful for one‑off tasks that don't need session isolation
-    or memory persistence.
+    \n    Useful for one‑off tasks that don't need session isolation\n    or memory persistence.
     """
     from agent.core.agent import build_agent
 
     agent = build_agent(model_name=model_name, provider=provider)
-
+    
     try:
         result = await agent.run(task)
-        return result.output
+        return getattr(result, "output", str(result))
     except Exception as e:
         logger.error(f"Simple task failed: {e}")
         fallback = FallbackHandler()
@@ -161,8 +166,7 @@ async def run_simple_task(task: str, model_name: str | None = None, provider: st
 
 async def cleanup():
     """Cleanup resources on application shutdown.
-
-    Closes the database connection and any other resources.
+    \n    Closes the database connection and any other resources.
     Should be called when the application is shutting down.
     """
     await close_db()
@@ -178,9 +182,7 @@ async def run_with_retry_legacy(
     provider: str | None = None,
 ) -> str:
     """Legacy runner without self‑healing (for comparison/testing).
-
-    This is the original implementation that counts all errors
-    against retry limit, even non‑retryable ones.
+    \n    This is the original implementation that counts all errors\n    against retry limit, even non‑retryable ones.
     """
     from agent.core.agent import build_session_agent
 
@@ -189,9 +191,11 @@ async def run_with_retry_legacy(
     last_error: Exception | None = None
     agent = build_session_agent(provider=provider)
 
+    # Create dependencies if not provided
     if deps is None:
         deps = await AgentDeps.create(chat_id=chat_id)
 
+    # Log user message to session
     await deps.add_user_message(task)
 
     try:
@@ -199,22 +203,28 @@ async def run_with_retry_legacy(
             try:
                 logger.info(f"Running task (attempt {attempt + 1}/{n})")
                 result = await agent.run(current_task, deps=deps)
-                await deps.add_assistant_message(result.output)
-                logger.info("Task completed successfully")
-                return result.output
+
+                # Log assistant response
+                await deps.add_assistant_message(getattr(result, "output", str(result)))
+
+                logger.info(f"Task completed successfully")
+                return getattr(result, "output", str(result))
+
             except Exception as e:
                 last_error = e
                 logger.warning(f"Attempt {attempt + 1}/{n} failed: {e}")
                 deps.last_error = str(e)
                 deps.retry_count = attempt + 1
+
                 if attempt < n - 1:
                     current_task = (
                         f"{task}\n\n"
                         f"[Попытка {attempt + 1}/{n} не удалась: {e}. "
-                        "Исправь проблему и выполни задачу снова.]"
+                        f"Исправь проблему и выполни задачу снова.]"
                     )
                 else:
                     break
+
         msg = (
             f"Не удалось выполнить задачу после {n} попыток.\n\n"
             f"Последняя ошибка: {last_error}"
