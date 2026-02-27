@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import time
 from typing import Optional
 
@@ -24,6 +25,17 @@ from agent.session import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _remove_db_files(db_path: str) -> None:
+    """Remove database file and WAL/SHM sidecars so a clean DB can be created."""
+    for path in (db_path, db_path + "-wal", db_path + "-shm", db_path + "-journal"):
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+                logger.info("Removed %s", path)
+        except OSError as e:
+            logger.warning("Could not remove %s: %s", path, e)
 
 
 class SessionDB:
@@ -66,6 +78,7 @@ class SessionDB:
     async def init(self) -> None:
         """Initialize database and create tables.
 
+        If the database is missing or corrupted, removes it and creates a new one.
         Creates all necessary tables and indexes for:
         - sessions: session metadata and routing state
         - messages: conversation history with tool calls
@@ -75,19 +88,32 @@ class SessionDB:
         """
         if self._initialized:
             return
-            
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._db = await aiosqlite.connect(self.db_path)
-        self._db.row_factory = aiosqlite.Row
-        
-        # Enable WAL mode for better concurrency (multiple readers, one writer)
-        # This prevents "readonly database" errors when multiple processes access the DB
-        await self._db.execute("PRAGMA journal_mode=WAL")
-        await self._db.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for locks
-        
-        await self._create_tables()
-        self._initialized = True
-        logger.info("SessionDB initialized at %s", self.db_path)
+
+        dir_path = os.path.dirname(self.db_path)
+        os.makedirs(dir_path, exist_ok=True)
+
+        for attempt in range(2):
+            try:
+                self._db = await aiosqlite.connect(self.db_path)
+                self._db.row_factory = aiosqlite.Row
+                await self._db.execute("PRAGMA journal_mode=WAL")
+                await self._db.execute("PRAGMA busy_timeout=5000")
+                await self._create_tables()
+                self._initialized = True
+                logger.info("SessionDB initialized at %s", self.db_path)
+                return
+            except (sqlite3.Error, OSError) as e:
+                if self._db:
+                    try:
+                        await self._db.close()
+                    except Exception:
+                        pass
+                    self._db = None
+                if attempt == 0:
+                    logger.warning("Database missing or corrupted (%s), creating new one: %s", type(e).__name__, e)
+                    _remove_db_files(self.db_path)
+                else:
+                    raise
 
     async def close(self) -> None:
         """Close database connection."""
@@ -619,6 +645,23 @@ class SessionDB:
             overview[cat].append(row["l0_abstract"])
 
         return overview
+
+    async def get_context_summary(self) -> str:
+        """Get L0 memory summary as a formatted string for context injection.
+
+        Returns:
+            Formatted string with categories and L0 abstracts, or "" if no memory.
+        """
+        overview = await self.get_l0_overview()
+        if not overview:
+            return ""
+        lines = []
+        for category in sorted(overview.keys()):
+            lines.append(f"## {category}")
+            for abstract in overview[category]:
+                lines.append(f"- {abstract}")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     async def delete_memory(self, key: str) -> bool:
         """Delete a memory entry by key.

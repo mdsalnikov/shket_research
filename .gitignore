@@ -13,6 +13,5 @@ GHTOKEN.txt
 .gh_token
 
 # Session database (runtime data)
-data/*.db
-data/*.db-journal
-data/.nfs*
+data/
+!data/.gitkeep
