@@ -1,7 +1,6 @@
 """Test that TODO is logged to agent log."""
 
 import logging
-import os
 
 import pytest
 

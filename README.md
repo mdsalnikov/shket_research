@@ -133,6 +133,7 @@ Any text message (not a command) is treated as a task for the agent. Tasks run a
 | `OPENROUTER_API_KEY` | API key for [OpenRouter](https://openrouter.ai) — used during development |
 | `TG_BOT_KEY` | Telegram Bot API token (obtained via [@BotFather](https://t.me/BotFather)) |
 | `GH_TOKEN` | GitHub token for `git push` and `gh` CLI (optional) |
+| `AGENT_MAX_RETRIES` | retries on task failure before giving up (default 3) |
 
 ```bash
 cp .env.example .env

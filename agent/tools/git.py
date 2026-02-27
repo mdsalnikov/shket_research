@@ -81,6 +81,32 @@ async def git_commit(message: str) -> str:
     return f"Committed: {out.split(chr(10))[0] if out else message}"
 
 
+async def git_pull(branch: str = "main") -> str:
+    """Pull latest from remote. Default: main.
+
+    Args:
+        branch: Branch to pull.
+    """
+    logger.info("Tool git_pull: %s", branch)
+    code, out = await _run_git(["pull", "origin", branch])
+    if code != 0:
+        return f"error (exit {code}): {out}"
+    return f"Pulled {branch} successfully"
+
+
+async def git_checkout(branch: str) -> str:
+    """Switch to branch.
+
+    Args:
+        branch: Branch name (e.g. main).
+    """
+    logger.info("Tool git_checkout: %s", branch)
+    code, out = await _run_git(["checkout", branch])
+    if code != 0:
+        return f"error (exit {code}): {out}"
+    return f"Switched to {branch}"
+
+
 async def git_push(branch: str | None = None) -> str:
     """Push commits to remote. Uses GH_TOKEN from GHTOKEN.txt or env for auth.
 
