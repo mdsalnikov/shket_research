@@ -403,6 +403,71 @@ class SessionDB:
             )
             await self._db.commit()
 
+
+    async def get_session_stats(
+        self, 
+        session_id: int,
+        include_last_messages: int = 5
+    ) -> dict:
+        """Get session statistics including message count and estimated tokens.
+
+        Args:
+            session_id: Session ID
+            include_last_messages: Number of last messages to include in stats
+            
+        Returns:
+            Dict with:
+            - session_id: int
+            - message_count: int
+            - created_at: str (ISO format)
+            - updated_at: str (ISO format)
+            - uptime_seconds: float
+            - estimated_tokens: int
+            - last_messages: list[dict] (preview of last messages)
+
+        """
+        from datetime import datetime
+        
+        # Get session metadata
+        session = await self.get_session(session_id)
+        if not session:
+            return {"error": "Session not found"}
+        
+        # Get recent messages for token estimation
+        messages = await self.get_recent_messages(session_id, limit=100)
+        
+        # Estimate tokens (rough: ~4 chars per token for English, ~2 for Russian)
+        total_chars = sum(len(m.content) for m in messages)
+        # Conservative estimate: 3 chars per token (mixed content)
+        estimated_tokens = total_chars // 3
+        
+        # Get last messages preview
+        last_messages = []
+        for msg in messages[-include_last_messages:]:
+            last_messages.append({
+                "role": msg.role,
+                "content_preview": msg.content[:100] + ("..." if len(msg.content) > 100 else ""),
+                "chars": len(msg.content),
+            })
+        
+        created_at = datetime.fromtimestamp(session["created_at"])
+        updated_at = datetime.fromtimestamp(session["updated_at"])
+        now = datetime.now()
+        
+        return {
+            "session_id": session_id,
+            "chat_id": session.get("chat_id"),
+            "message_count": session.get("message_count", 0),
+            "created_at": created_at.isoformat(timespec="seconds"),
+            "updated_at": updated_at.isoformat(timespec="seconds"),
+            "uptime_seconds": (now - created_at).total_seconds(),
+            "idle_seconds": (now - updated_at).total_seconds(),
+            "estimated_tokens": estimated_tokens,
+            "total_chars": total_chars,
+            "last_messages": last_messages,
+        }
+
+    # ============ Memory Operations ============
     # ============ Memory Operations ============
 
     async def save_memory(self, entry: MemoryEntry) -> None:

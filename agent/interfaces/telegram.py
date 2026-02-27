@@ -16,7 +16,7 @@ from agent.activity_log import (
     log_task_end,
     get_activity_log_tail,
 )
-from agent.config import LOG_FILE, TG_BOT_KEY, setup_logging, VERSION
+from agent.config import LOG_FILE, TG_BOT_KEY, TG_WHITELIST, setup_logging, VERSION
 from agent.session_globals import close_db
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,33 @@ HELP_TEXT = (
     f"\n\nВерсия: {VERSION}"
 )
 
+# Whitelist error message
+WHITELIST_ERROR = (
+    "⛔ *Access Denied*\n\n"
+    "Этот бот доступен только авторизованным пользователям.\n"
+    "Если вы должны иметь доступ, обратитесь к администратору."
+)
+
+
+def _is_user_allowed(username: str | None) -> bool:
+    """Check if user is in whitelist.
+    
+    Args:
+        username: Telegram username (without @) or None
+        
+    Returns:
+        True if user is allowed or whitelist is empty (dev mode)
+    """
+    if not TG_WHITELIST:
+        # No whitelist configured = allow all (development mode)
+        return True
+    
+    if not username:
+        # User has no username = deny
+        return False
+    
+    return username.lower() in TG_WHITELIST
+
 
 @dataclass
 class TaskInfo:
@@ -67,16 +94,38 @@ _task_counter = 0
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        logger.warning("Unauthorized /start from user: %s (id=%s)", username, user.id if user else "?")
+        return
+    
     await update.message.reply_text(
         "🤖 Shket Research Agent online.\nSend me a task or type /help for commands."
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     uptime = int(time.time() - _start_time)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
@@ -89,6 +138,13 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     if not _active_tasks:
         await update.message.reply_text("No active tasks.")
         return
@@ -101,6 +157,13 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     """Show human-readable activity log."""
     n = 30
     if context.args:
@@ -116,6 +179,13 @@ async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     """Export both activity log and technical log."""
     if not os.path.exists(LOG_FILE):
         await update.message.reply_text("Log file not found.")
@@ -129,6 +199,13 @@ async def exportlogs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    username = user.username if user else None
+    
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    
     logger.warning("/panic invoked by %s", update.effective_user.id)
     await update.message.reply_text("🛑 PANIC: halting all agent processes.")
     os._exit(1)
@@ -182,10 +259,20 @@ async def _run_agent_task(
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    username = user.username if user else None
+    
+    # Whitelist check
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        logger.warning("Unauthorized message from user: %s (id=%s): %s", 
+                      username, user.id if user else "?", 
+                      update.message.text[:50] + "...")
+        return
+    
     global _task_counter
     text = update.message.text
     chat_id = update.effective_chat.id
-    user = update.effective_user
     logger.info("Task from %s: %s", user.id, text)
 
     # Log user message
@@ -217,6 +304,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def post_init(app) -> None:
     await app.bot.set_my_commands(BOT_COMMANDS)
     logger.info("Bot commands registered with Telegram")
+    
+    # Log whitelist status
+    if TG_WHITELIST:
+        logger.info("Whitelist mode: %d allowed users", len(TG_WHITELIST))
+    else:
+        logger.warning("⚠️ No whitelist configured - ALL USERS ALLOWED (development mode)")
 
 
 def run_bot() -> None:
