@@ -230,8 +230,8 @@ cd <repo>
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Install dependencies (editable + dev tools)
+pip install -e ".[dev]"
 
 # 4. Configure environment
 cp .env.example .env
@@ -260,7 +260,7 @@ agent/
 logs/
 tests/
 .env.example
-requirements.txt
+pyproject.toml
 README.md
 ```
 
