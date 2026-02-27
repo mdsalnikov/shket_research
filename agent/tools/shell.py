@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+TIMEOUT = 30
+
+
+async def run_shell(command: str) -> str:
+    """Execute a shell command on the host OS and return stdout+stderr.
+
+    Args:
+        command: The shell command to execute.
+    """
+    logger.info("Tool run_shell: %s", command)
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd="/workspace",
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
+        output = stdout.decode(errors="replace").strip()
+        if len(output) > 4000:
+            output = output[:4000] + "\n… (truncated)"
+        result = f"exit_code={proc.returncode}\n{output}"
+    except asyncio.TimeoutError:
+        proc.kill()
+        result = "error: command timed out after 30s"
+    except Exception as e:
+        result = f"error: {e}"
+    logger.info("Tool run_shell result: %s", result[:200])
+    return result

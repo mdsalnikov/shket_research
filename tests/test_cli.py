@@ -2,20 +2,23 @@ import subprocess
 import sys
 
 
-def test_agent_run_hello_world():
+def test_agent_status():
     result = subprocess.run(
-        [sys.executable, "-m", "agent", "run", "hello world"],
+        [sys.executable, "-m", "agent", "status"],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
-    assert "Agent received task: hello world" in result.stdout
+    assert "Available tools" in result.stdout
 
 
-def test_agent_no_args():
+def test_agent_help():
     result = subprocess.run(
-        [sys.executable, "-m", "agent"],
+        [sys.executable, "-m", "agent", "--help"],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
+    assert "run" in result.stdout
+    assert "bot" in result.stdout
+    assert "status" in result.stdout
