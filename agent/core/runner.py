@@ -117,7 +117,7 @@ async def run_with_retry(
     await deps.add_user_message(task)
 
     # Build agent
-    agent = build_session_agent(provider=provider)
+    agent = await build_session_agent(provider=provider)
 
     # Create self-healing runner
     healing_runner = SelfHealingRunner(max_retries=n)

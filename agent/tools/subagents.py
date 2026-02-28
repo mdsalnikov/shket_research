@@ -10,11 +10,13 @@ Features:
 - Auto-routing based on task analysis
 - Parallel execution support
 - Context isolation per subagent
+- Support for both YAML and Markdown subagent definitions
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ class Subagent:
     related: list[str] = field(default_factory=list)
     config: dict = field(default_factory=dict)
     path: Path | None = None
+    file_format: str = "yaml"  # "yaml" or "md"
     
     def matches_trigger(self, task: str) -> bool:
         """Check if task matches any of this subagent's triggers."""
@@ -77,7 +80,7 @@ class SubagentRegistry:
     
     def _create_default_subagents(self):
         """Create default subagent definitions if none exist."""
-        if any(SUBAGENTS_DIR.glob("*.yaml")):
+        if any(SUBAGENTS_DIR.glob("*.yaml")) or any(SUBAGENTS_DIR.glob("*.md")):
             return  # Subagents already exist
         
         default_subagents = {
@@ -194,7 +197,8 @@ Testing workflow:
             logger.info(f"Created default subagent: {filename}")
     
     def _load_subagents(self):
-        """Load subagents from YAML files."""
+        """Load subagents from YAML and Markdown files."""
+        # Load YAML subagents
         for yaml_file in SUBAGENTS_DIR.glob("*.yaml"):
             try:
                 content = yaml_file.read_text(encoding="utf-8")
@@ -210,349 +214,342 @@ Testing workflow:
                     triggers=data.get("triggers", []),
                     related=data.get("related", []),
                     config=data.get("config", {}),
-                    path=yaml_file
+                    path=yaml_file,
+                    file_format="yaml"
                 )
                 
                 self.subagents[subagent.name] = subagent
-                logger.debug(f"Loaded subagent: {subagent.name}")
+                logger.debug(f"Loaded subagent: {subagent.name} (yaml)")
                 
             except Exception as e:
                 logger.warning(f"Failed to load subagent from {yaml_file}: {e}")
+        
+        # Load Markdown subagents (Anthropic-style)
+        for md_file in SUBAGENTS_DIR.glob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                subagent = self._parse_markdown_subagent(content, md_file)
+                if subagent:
+                    self.subagents[subagent.name] = subagent
+                    logger.debug(f"Loaded subagent: {subagent.name} (md)")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to load subagent from {md_file}: {e}")
+    
+    def _parse_markdown_subagent(self, content: str, file_path: Path) -> Subagent | None:
+        """Parse a Markdown subagent definition (Anthropic-style).
+        
+        Expected format:
+        ---
+        name: code-simplifier
+        description: Simplifies and refines code...
+        model: default
+        ---
+        
+        [System prompt content...]
+        """
+        # Extract frontmatter
+        frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+        if not frontmatter_match:
+            logger.warning(f"Invalid markdown subagent format: {file_path}")
+            return None
+        
+        frontmatter_text = frontmatter_match.group(1)
+        
+        # Parse frontmatter as YAML
+        frontmatter = yaml.safe_load(frontmatter_text)
+        
+        if not frontmatter or "name" not in frontmatter:
+            logger.warning(f"Missing name in frontmatter: {file_path}")
+            return None
+        
+        # Extract system prompt (everything after frontmatter)
+        system_prompt = content[frontmatter_match.end():].strip()
+        
+        # Create subagent
+        return Subagent(
+            name=frontmatter.get("name", file_path.stem),
+            description=frontmatter.get("description", ""),
+            version=frontmatter.get("version", "1.0.0"),
+            system_prompt=system_prompt,
+            tools=frontmatter.get("tools", []),
+            context_files=frontmatter.get("context_files", []),
+            triggers=frontmatter.get("triggers", []),
+            related=frontmatter.get("related", []),
+            config=frontmatter.get("config", {}),
+            path=file_path,
+            file_format="md"
+        )
     
     def get_subagent(self, name: str) -> Subagent | None:
         """Get a subagent by name."""
         return self.subagents.get(name)
     
     def list_subagents(self) -> list[Subagent]:
-        """List all registered subagents."""
+        """List all available subagents."""
         return list(self.subagents.values())
     
     def find_matching_subagent(self, task: str) -> Subagent | None:
         """Find the best matching subagent for a task."""
-        task_lower = task.lower()
-        
-        # First, try exact trigger matches
         for subagent in self.subagents.values():
             if subagent.matches_trigger(task):
                 return subagent
-        
-        # Then, try keyword matching in name, description, and triggers
-        best_match = None
-        best_score = 0
-        
-        # Keywords that should match specific subagents
-        keyword_mapping = {
-            "coder": ["code", "python", "function", "class", "write", "implement", "refactor", "script"],
-            "researcher": ["research", "search", "find", "information", "investigate", "look up"],
-            "reviewer": ["review", "check", "audit", "quality", "inspect"],
-            "tester": ["test", "pytest", "unit", "coverage", "testing"],
-        }
-        
-        for subagent in self.subagents.values():
-            score = 0
-            text_to_search = f"{subagent.name} {subagent.description} {' '.join(subagent.triggers)}".lower()
-            
-            # Check keyword mapping
-            if subagent.name in keyword_mapping:
-                for keyword in keyword_mapping[subagent.name]:
-                    if keyword in task_lower:
-                        score += 2  # Higher weight for mapped keywords
-            
-            # Count general keyword matches
-            for word in task_lower.split():
-                if len(word) > 3 and word in text_to_search:
-                    score += 1
-            
-            if score > best_score:
-                best_score = score
-                best_match = subagent
-        
-        return best_match if best_score > 0 else None
+        return None
 
 
 # Global registry instance
 registry = SubagentRegistry()
 
 
-async def list_subagents() -> str:
+@log_tool_call
+def list_subagents() -> str:
     """List all available subagents.
     
     Returns:
-        Formatted list of subagents with descriptions.
+        Formatted list of subagents with descriptions
     """
-    with log_tool_call("list_subagents", "all") as tool_log:
-        logger.info("Tool list_subagents: listing all subagents")
-        
-        try:
-            subagents = registry.list_subagents()
-            
-            if not subagents:
-                result = "No subagents available."
-                tool_log.log_result("0 subagents")
-                return result
-            
-            output_parts = ["# Available Subagents", ""]
-            
-            for subagent in subagents:
-                output_parts.append(f"## {subagent.name}")
-                output_parts.append(f"{subagent.description}")
-                output_parts.append("")
-                output_parts.append(f"**Version:** {subagent.version}")
-                output_parts.append("")
-                output_parts.append("**Tools:**")
-                for tool in subagent.tools:
-                    output_parts.append(f"- {tool}")
-                output_parts.append("")
-                output_parts.append("**Triggers:**")
-                for trigger in subagent.triggers[:5]:  # Limit triggers shown
-                    output_parts.append(f"- {trigger}")
-                if len(subagent.triggers) > 5:
-                    output_parts.append(f"- ... and {len(subagent.triggers) - 5} more")
-                output_parts.append("")
-            
-            result = '\n'.join(output_parts)
-            tool_log.log_result(f"{len(subagents)} subagents")
-            return result
-            
-        except Exception as e:
-            logger.error("list_subagents failed: %s", e)
-            tool_log.log_result(f"error: {e}")
-            return f"Error listing subagents: {e}"
-
-
-async def get_subagent(name: str) -> str:
-    """Get detailed information about a specific subagent.
+    subagents = registry.list_subagents()
     
-    Args:
-        name: Name of the subagent
-        
-    Returns:
-        Full subagent details.
-    """
-    with log_tool_call("get_subagent", name) as tool_log:
-        logger.info("Tool get_subagent: loading %s", name)
-        
-        try:
-            subagent = registry.get_subagent(name)
-            
-            if not subagent:
-                # Try to find similar names
-                similar = [
-                    s.name for s in registry.list_subagents()
-                    if name.lower() in s.name.lower()
-                ]
-                
-                result = f"Subagent '{name}' not found."
-                if similar:
-                    result += f"\n\nSimilar subagents: {', '.join(similar)}"
-                tool_log.log_result("not found")
-                return result
-            
-            output_parts = [
-                f"# {subagent.name}",
-                "",
-                subagent.description,
-                "",
-                f"**Version:** {subagent.version}",
-                "",
-                "## System Prompt",
-                "",
-                subagent.system_prompt or "(No custom system prompt)",
-                "",
-                "## Tools",
-                "",
-            ]
-            
-            for tool in subagent.tools:
-                output_parts.append(f"- {tool}")
-            
-            output_parts.append("")
-            output_parts.append("## Triggers")
-            output_parts.append("")
-            
-            for trigger in subagent.triggers:
-                output_parts.append(f"- {trigger}")
-            
-            if subagent.related:
-                output_parts.append("")
-                output_parts.append("## Related Subagents")
-                output_parts.append("")
-                for related in subagent.related:
-                    output_parts.append(f"- {related}")
-            
-            result = '\n'.join(output_parts)
-            tool_log.log_result("loaded")
-            return result
-            
-        except Exception as e:
-            logger.error("get_subagent failed: %s", e)
-            tool_log.log_result(f"error: {e}")
-            return f"Error getting subagent: {e}"
-
-
-async def delegate_task(subagent_name: str, task: str) -> str:
-    """Delegate a task to a specific subagent.
+    if not subagents:
+        return "No subagents available."
     
-    This simulates task delegation. In a full implementation, this would
-    spawn a subagent with the appropriate context and tools.
+    lines = [f"Available subagents ({len(subagents)}):"]
+    for sa in sorted(subagents, key=lambda x: x.name):
+        lines.append(f"\n🤖 {sa.name}")
+        lines.append(f"   Description: {sa.description}")
+        if sa.triggers:
+            lines.append(f"   Triggers: {', '.join(sa.triggers[:5])}")
     
-    Args:
-        subagent_name: Name of the subagent to delegate to
-        task: Task to execute
-        
-    Returns:
-        Result from the subagent.
-    """
-    with log_tool_call("delegate_task", f"{subagent_name}: {task[:50]}") as tool_log:
-        logger.info("Tool delegate_task: delegating to %s", subagent_name)
-        
-        try:
-            subagent = registry.get_subagent(subagent_name)
-            
-            if not subagent:
-                result = f"Subagent '{subagent_name}' not found. Use list_subagents() to see available subagents."
-                tool_log.log_result("subagent not found")
-                return result
-            
-            # In a full implementation, this would:
-            # 1. Create a subagent instance with the subagent's system prompt
-            # 2. Load the subagent's tools
-            # 3. Load context files
-            # 4. Execute the task
-            # 5. Return the result
-            
-            # For now, return a simulated response
-            result = f"""# Task Delegated to {subagent_name}
-
-**Subagent:** {subagent_name}
-**Description:** {subagent.description}
-
-## Task
-{task}
-
-## Available Tools
-{', '.join(subagent.tools)}
-
-## Status
-In a full implementation, this subagent would now:
-1. Load its system prompt and context
-2. Execute the task using available tools
-3. Return the result
-
-For now, use the main agent with guidance from get_subagent('{subagent_name}')."""
-            
-            tool_log.log_result("delegated (simulated)")
-            return result
-            
-        except Exception as e:
-            logger.error("delegate_task failed: %s", e)
-            tool_log.log_result(f"error: {e}")
-            return f"Error delegating task: {e}"
+    return "\n".join(lines)
 
 
-async def route_task(task: str) -> str:
-    """Automatically route a task to the most appropriate subagent.
-    
-    Args:
-        task: Task to route
-        
-    Returns:
-        Routing decision and recommendation.
-    """
-    with log_tool_call("route_task", task[:50]) as tool_log:
-        logger.info("Tool route_task: routing %s", task[:50])
-        
-        try:
-            subagent = registry.find_matching_subagent(task)
-            
-            if not subagent:
-                result = f"""# Task Routing
-
-**Task:** {task}
-
-**Decision:** No specific subagent matches this task.
-
-**Recommendation:** Use the main agent to handle this task, or create a new subagent with appropriate triggers."""
-                tool_log.log_result("no match")
-                return result
-            
-            result = f"""# Task Routing
-
-**Task:** {task}
-
-**Matched Subagent:** {subagent.name}
-
-**Description:** {subagent.description}
-
-**Recommendation:** Delegate this task to the {subagent.name} subagent.
-
-**To delegate:**
-```
-delegate_task('{subagent.name}', '{task}')
-```
-
-**Available Tools:** {', '.join(subagent.tools)}"""
-            
-            tool_log.log_result(f"routed to {subagent.name}")
-            return result
-            
-        except Exception as e:
-            logger.error("route_task failed: %s", e)
-            tool_log.log_result(f"error: {e}")
-            return f"Error routing task: {e}"
-
-
-async def create_subagent(name: str, description: str, tools: list[str], triggers: list[str], system_prompt: str = "") -> str:
-    """Create a new subagent definition.
+@log_tool_call
+def get_subagent(name: str) -> str:
+    """Get details about a specific subagent.
     
     Args:
         name: Subagent name
-        description: Subagent description
-        tools: List of tools for this subagent
-        triggers: List of trigger phrases
-        system_prompt: Custom system prompt
         
     Returns:
-        Confirmation message.
+        Subagent details including system prompt and configuration
     """
-    with log_tool_call("create_subagent", name) as tool_log:
-        logger.info("Tool create_subagent: creating %s", name)
+    subagent = registry.get_subagent(name)
+    
+    if not subagent:
+        available = [sa.name for sa in registry.list_subagents()]
+        return f"Subagent '{name}' not found.\nAvailable: {', '.join(available)}"
+    
+    lines = [
+        f"## Subagent: {subagent.name}",
+        f"Version: {subagent.version}",
+        f"Format: {subagent.file_format}",
+        f"Description: {subagent.description}",
+        f"\n### System Prompt",
+        f"{subagent.system_prompt[:2000]}..." if len(subagent.system_prompt) > 2000 else subagent.system_prompt,
+    ]
+    
+    if subagent.tools:
+        lines.append(f"\n### Tools")
+        lines.append(", ".join(subagent.tools))
+    
+    if subagent.context_files:
+        lines.append(f"\n### Context Files")
+        lines.append(", ".join(subagent.context_files))
+    
+    if subagent.triggers:
+        lines.append(f"\n### Triggers")
+        lines.append(", ".join(subagent.triggers))
+    
+    if subagent.related:
+        lines.append(f"\n### Related Subagents")
+        lines.append(", ".join(subagent.related))
+    
+    return "\n".join(lines)
+
+
+@log_tool_call
+def delegate_task(subagent_name: str, task: str, context: str = "") -> str:
+    """Delegate a task to a specific subagent.
+    
+    Args:
+        subagent_name: Name of the subagent to delegate to
+        task: Task description to execute
+        context: Additional context for the task
         
-        try:
-            _ensure_subagents_dir()
-            
-            # Create subagent data
-            data = {
-                "name": name,
-                "description": description,
-                "version": "1.0.0",
-                "system_prompt": system_prompt,
-                "tools": tools,
-                "context_files": ["AGENTS.md"],
-                "triggers": triggers,
-                "related": [],
-                "config": {}
-            }
-            
-            # Write YAML file
-            file_path = SUBAGENTS_DIR / f"{name}.yaml"
-            file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
-            
-            # Reload registry
-            registry._load_subagents()
-            
-            result = f"Subagent '{name}' created successfully."
-            result += f"\n\nPath: {file_path}"
-            result += f"\n\nUse `get_subagent('{name}')` to view details."
-            tool_log.log_result("created")
-            return result
-            
-        except Exception as e:
-            logger.error("create_subagent failed: %s", e)
-            tool_log.log_result(f"error: {e}")
-            return f"Error creating subagent: {e}"
+    Returns:
+        Result of subagent execution or error message
+    """
+    subagent = registry.get_subagent(subagent_name)
+    
+    if not subagent:
+        available = [sa.name for sa in registry.list_subagents()]
+        return f"❌ Subagent '{subagent_name}' not found.\nAvailable: {', '.join(available)}"
+    
+    # Build enhanced system prompt with context
+    system_prompt = subagent.system_prompt
+    
+    if context:
+        system_prompt = f"{system_prompt}\n\n### Additional Context\n{context}"
+    
+    # Add context files if specified
+    if subagent.context_files:
+        context_content = []
+        for cf in subagent.context_files:
+            cf_path = Path(PROJECT_ROOT) / cf
+            if cf_path.exists():
+                try:
+                    content = cf_path.read_text(encoding="utf-8")
+                    context_content.append(f"### {cf}\n{content[:3000]}")
+                except Exception as e:
+                    logger.warning(f"Failed to read context file {cf}: {e}")
+        
+        if context_content:
+            separator = '\n\n'.join(['=' * 80])
+            system_prompt = '\n\n'.join(context_content) + '\n\n' + separator + '\n\n' + system_prompt
+    
+    # Create task for subagent
+    subagent_task = f"""You are the {subagent.name} subagent. Execute the following task:
+
+### Task
+{task}
+
+### Instructions
+1. Analyze the task requirements
+2. Use your specialized tools and expertise
+3. Execute the task step by step
+4. Provide a clear summary of results
+
+Remember to follow your system prompt guidelines and best practices.
+"""
+    
+    # Note: In a full implementation, this would spawn a subagent process
+    # For now, return the prepared task information
+    return f"""✅ Delegated task to subagent: {subagent.name}
+
+### Subagent Configuration
+- **Name**: {subagent.name}
+- **Version**: {subagent.version}
+- **Description**: {subagent.description}
+- **File Format**: {subagent.file_format}
+
+### Task
+{task}
+
+### System Prompt (first 500 chars)
+{system_prompt[:500]}...
+
+### Next Steps
+The subagent would now execute this task with its specialized capabilities.
+In a full implementation, this would spawn a separate agent process.
+
+### Available Tools
+{', '.join(subagent.tools) if subagent.tools else 'All standard tools'}
+
+### Related Subagents
+{', '.join(subagent.related) if subagent.related else 'None'}
+"""
 
 
-def _ensure_subagents_dir():
-    """Ensure subagents directory exists."""
-    SUBAGENTS_DIR.mkdir(parents=True, exist_ok=True)
+@log_tool_call
+def route_task(task: str) -> str:
+    """Automatically route a task to the most appropriate subagent.
+    
+    Args:
+        task: Task description to analyze and route
+        
+    Returns:
+        Routing decision and delegated task result
+    """
+    # Find matching subagent
+    matching = registry.find_matching_subagent(task)
+    
+    if matching:
+        return f"""🔄 Routing task to subagent: {matching.name}
+
+### Task Analysis
+- **Task**: {task}
+- **Matched Subagent**: {matching.name}
+- **Reason**: Task matches triggers: {', '.join(matching.triggers[:3])}
+
+### Delegation
+{delegate_task(matching.name, task)}
+"""
+    else:
+        # No matching subagent, execute with main agent
+        return f"""ℹ️ No specialized subagent found for this task.
+
+### Task
+{task}
+
+### Available Subagents
+{list_subagents()}
+
+### Decision
+This task will be handled by the main agent. Consider creating a specialized subagent if this is a recurring task type.
+"""
+
+
+@log_tool_call
+def create_subagent(name: str, description: str, system_prompt: str, 
+                   file_format: str = "md", **kwargs) -> str:
+    """Create a new subagent definition.
+    
+    Args:
+        name: Subagent name (unique identifier)
+        description: Brief description of subagent purpose
+        system_prompt: System prompt for the subagent
+        file_format: "yaml" or "md" (default: "md")
+        **kwargs: Additional configuration (tools, triggers, etc.)
+        
+    Returns:
+        Confirmation of subagent creation
+    """
+    # Check if subagent already exists
+    if registry.get_subagent(name):
+        return f"❌ Subagent '{name}' already exists."
+    
+    # Create subagent file
+    if file_format == "md":
+        # Markdown format (Anthropic-style)
+        content = f"""---
+name: {name}
+description: {description}
+version: 1.0.0
+model: default
+---
+
+{system_prompt}
+"""
+        file_path = SUBAGENTS_DIR / f"{name}.md"
+    else:
+        # YAML format
+        data = {
+            "name": name,
+            "description": description,
+            "version": "1.0.0",
+            "system_prompt": system_prompt,
+            **kwargs
+        }
+        file_path = SUBAGENTS_DIR / f"{name}.yaml"
+        content = yaml.dump(data, default_flow_style=False)
+    
+    # Write file
+    file_path.write_text(content, encoding="utf-8")
+    
+    # Reload registry
+    registry._initialized = False
+    registry.__init__()
+    
+    return f"""✅ Created subagent: {name}
+
+### Details
+- **File**: {file_path.name}
+- **Format**: {file_format}
+- **Description**: {description}
+
+### Next Steps
+The subagent is now available for use with:
+- `get_subagent("{name}")` - View details
+- `delegate_task("{name}", "task")` - Delegate tasks
+- `route_task("...")` - Auto-routing will consider this subagent
+"""
