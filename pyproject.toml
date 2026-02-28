@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shket-research-agent"
-version = "0.4.3"
+version = "0.4.6"
 description = "Autonomous LLM-powered agent for Ubuntu server — CLI and Telegram bot with SQLite session persistence"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,8 +46,11 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = ["agent: tests that call the real LLM (require OPENROUTER_API_KEY)"]
+# Disable plugins that can block process exit after tests pass
+addopts = "-p no:logfire -p no:anyio"

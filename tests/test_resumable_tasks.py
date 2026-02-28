@@ -1,25 +1,24 @@
 """Tests for resumable tasks: DB, runner integration, resume flow, edge cases."""
 
-import asyncio
 import os
 import tempfile
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent.session_db import SessionDB
+import pytest
+
 from agent.core.runner import (
-    run_task_with_session,
-    run_with_retry,
     AUTO_REPAIR_TASK_PREFIX,
     _build_repair_goal,
     _should_create_repair_task,
+    run_task_with_session,
+    run_with_retry,
 )
 from agent.interfaces.telegram import (
+    MAX_RESUME_COUNT,
     _build_resume_prompt,
     _do_resume,
-    MAX_RESUME_COUNT,
 )
+from agent.session_db import SessionDB
 
 
 @pytest.fixture
@@ -40,6 +39,7 @@ async def session_db(temp_db):
 
 
 # ---------- SessionDB unit ----------
+
 
 @pytest.mark.asyncio
 async def test_upsert_resumable_task_returns_id(session_db):
@@ -90,23 +90,27 @@ async def test_increment_resume_and_set_resumed_at(session_db):
 
 # ---------- Runner integration ----------
 
+
 @pytest.mark.asyncio
 async def test_run_task_with_session_accepts_resumable_task_id(session_db):
     """run_task_with_session accepts resumable_task_id and passes it to run_with_retry (smoke)."""
-    with patch("agent.session_globals.get_db", return_value=session_db):
-        session_id = await session_db.get_or_create_session(111)
-        rid = await session_db.upsert_resumable_task(session_id, 111, "Reply with OK")
-    with patch("agent.core.runner.run_with_retry", AsyncMock(return_value="OK")) as mock_run:
-        out = await run_task_with_session(
-            "Reply with OK", chat_id=111, provider="vllm", resumable_task_id=rid
-        )
-        assert out == "OK"
-        mock_run.assert_awaited_once()
-        call_kw = mock_run.await_args[1]
-        assert call_kw.get("resumable_task_id") == rid
+    session_id = await session_db.get_or_create_session(111)
+    rid = await session_db.upsert_resumable_task(session_id, 111, "Reply with OK")
+
+    # Mock both get_db and run_with_retry together
+    with patch("agent.dependencies.get_db", AsyncMock(return_value=session_db)):
+        with patch("agent.core.runner.run_with_retry", AsyncMock(return_value="OK")) as mock_run:
+            out = await run_task_with_session(
+                "Reply with OK", chat_id=111, provider="vllm", resumable_task_id=rid
+            )
+            assert out == "OK"
+            mock_run.assert_awaited_once()
+            call_kw = mock_run.await_args[1]
+            assert call_kw.get("resumable_task_id") == rid
 
 
 # ---------- Resume prompt ----------
+
 
 def test_build_resume_prompt_contains_goal_and_resume():
     prompt = _build_resume_prompt("Implement X", resume_count=2)
@@ -116,6 +120,7 @@ def test_build_resume_prompt_contains_goal_and_resume():
 
 
 # ---------- _do_resume with mocks ----------
+
 
 @pytest.mark.asyncio
 async def test_do_resume_calls_run_and_mark_completed(session_db):
@@ -127,7 +132,8 @@ async def test_do_resume_calls_run_and_mark_completed(session_db):
         "goal": "Goal",
         "resume_count": 0,
     }
-    with patch("agent.session_globals.get_db", return_value=session_db):
+    # Mock get_db in session_globals (used by _do_resume) and run_task_with_session in runner
+    with patch("agent.session_globals.get_db", AsyncMock(return_value=session_db)):
         with patch("agent.core.runner.run_task_with_session", AsyncMock(return_value="Result")):
             await _do_resume(bot, task_row)
     assert bot.send_message.await_count >= 1
@@ -144,7 +150,7 @@ async def test_do_resume_max_resume_count_marks_failed_and_does_not_run(session_
     row = (await session_db.get_incomplete_resumable_tasks())[0]
     assert row["resume_count"] == MAX_RESUME_COUNT
     bot = AsyncMock()
-    with patch("agent.session_globals.get_db", return_value=session_db):
+    with patch("agent.session_globals.get_db", AsyncMock(return_value=session_db)):
         with patch("agent.core.runner.run_task_with_session", AsyncMock()) as mock_run:
             await _do_resume(bot, row)
             mock_run.assert_not_awaited()
@@ -190,21 +196,27 @@ def test_should_create_repair_task_skip_already_repair():
 @pytest.mark.asyncio
 async def test_failure_creates_auto_repair_resumable_task(session_db):
     """When run fails (success=False) in bot context, a resumable repair task is created."""
-    await session_db.get_or_create_session(200)
+    session_id = await session_db.get_or_create_session(200)
+
+    # Create deps directly with session_db
+    from agent.dependencies import AgentDeps
+
+    deps = AgentDeps(
+        db=session_db,
+        session_id=session_id,
+        chat_id=200,
+        last_error="Last error",
+        retry_count=2,
+    )
+
     with patch("agent.core.runner.SelfHealingRunner") as mock_runner_class:
         mock_runner = MagicMock()
         mock_runner.run = AsyncMock(return_value=("Partial output", False))
         mock_runner_class.return_value = mock_runner
 
-        with patch("agent.dependencies.get_db", AsyncMock(return_value=session_db)):
-            from agent.dependencies import AgentDeps
-            deps = await AgentDeps.create(chat_id=200)
-            deps.last_error = "Last error"
-            deps.retry_count = 2
-
-            with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
-                out = await run_with_retry("Original user goal", deps=deps, max_retries=3)
-                assert out == "Partial output"
+        with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
+            out = await run_with_retry("Original user goal", deps=deps, max_retries=3)
+            assert out == "Partial output"
 
     incomplete = await session_db.get_incomplete_resumable_tasks()
     assert len(incomplete) == 1
@@ -217,21 +229,88 @@ async def test_failure_creates_auto_repair_resumable_task(session_db):
 @pytest.mark.asyncio
 async def test_repair_task_failure_does_not_create_second_repair(session_db):
     """When an auto-repair task itself fails, we do not create another repair (no chain)."""
-    await session_db.get_or_create_session(201)
-    repair_goal = f"{AUTO_REPAIR_TASK_PREFIX} Fix the thing. Original goal: X"
+    session_id = await session_db.get_or_create_session(201)
+    repair_goal = f"{AUTO_REPAIR_TASK_PREFIX} fix the original task"
+
+    # Create deps directly with session_db
+    from agent.dependencies import AgentDeps
+
+    deps = AgentDeps(
+        db=session_db,
+        session_id=session_id,
+        chat_id=201,
+        last_error="Error in repair",
+        retry_count=1,
+    )
+
     with patch("agent.core.runner.SelfHealingRunner") as mock_runner_class:
         mock_runner = MagicMock()
-        mock_runner.run = AsyncMock(return_value=("Still failed", False))
+        mock_runner.run = AsyncMock(return_value=("Repair failed", False))
         mock_runner_class.return_value = mock_runner
 
-        with patch("agent.session_globals.get_db", return_value=session_db):
-            from agent.dependencies import AgentDeps
-            deps = await AgentDeps.create(chat_id=201)
-            deps.last_error = "Again"
-            deps.retry_count = 1
+        with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
+            out = await run_with_retry(repair_goal, deps=deps, max_retries=1)
+            assert out == "Repair failed"
 
-            with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
-                await run_with_retry(repair_goal, deps=deps, max_retries=2)
+    # Should not create another repair task
+    incomplete = await session_db.get_incomplete_resumable_tasks()
+    assert len(incomplete) == 0
+
+
+@pytest.mark.asyncio
+async def test_success_marks_resumable_task_completed(session_db):
+    """When run succeeds with resumable_task_id, the task is marked completed."""
+    session_id = await session_db.get_or_create_session(202)
+    rid = await session_db.upsert_resumable_task(session_id, 202, "Complete this task")
+
+    # Create deps directly with session_db
+    from agent.dependencies import AgentDeps
+
+    deps = AgentDeps(
+        db=session_db,
+        session_id=session_id,
+        chat_id=202,
+    )
+
+    with patch("agent.core.runner.SelfHealingRunner") as mock_runner_class:
+        mock_runner = MagicMock()
+        mock_runner.run = AsyncMock(return_value=("Task done", True))
+        mock_runner_class.return_value = mock_runner
+
+        with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
+            out = await run_with_retry("Complete this task", deps=deps, resumable_task_id=rid)
+            assert out == "Task done"
 
     incomplete = await session_db.get_incomplete_resumable_tasks()
     assert len(incomplete) == 0
+
+
+@pytest.mark.asyncio
+async def test_exception_creates_auto_repair_task(session_db):
+    """When run raises exception in bot context, a resumable repair task is created."""
+    session_id = await session_db.get_or_create_session(203)
+
+    from agent.dependencies import AgentDeps
+
+    deps = AgentDeps(
+        db=session_db,
+        session_id=session_id,
+        chat_id=203,
+    )
+
+    with patch("agent.core.runner.SelfHealingRunner") as mock_runner_class:
+        mock_runner = MagicMock()
+        mock_runner.run = AsyncMock(side_effect=Exception("Unexpected error"))
+        mock_runner_class.return_value = mock_runner
+
+        with patch("agent.core.agent.build_session_agent", return_value=MagicMock()):
+            out = await run_with_retry("Original task", deps=deps, max_retries=1)
+            assert "Unexpected error" in out or "error" in out.lower()
+
+    incomplete = await session_db.get_incomplete_resumable_tasks()
+    assert len(incomplete) == 1
+    assert incomplete[0]["goal"].startswith(AUTO_REPAIR_TASK_PREFIX)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

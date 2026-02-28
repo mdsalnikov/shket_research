@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 
-from agent.activity_log import log_tool_call
+from agent.activity_log import get_bot_errors_tail, log_tool_call
 from agent.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,8 @@ def _list_backup_dirs() -> list[str]:
     if not os.path.isdir(PROJECT_ROOT):
         return []
     names = [
-        n for n in os.listdir(PROJECT_ROOT)
+        n
+        for n in os.listdir(PROJECT_ROOT)
         if n.startswith(".backup_") and os.path.isdir(os.path.join(PROJECT_ROOT, n))
     ]
     return sorted(names)
@@ -178,6 +179,23 @@ async def run_tests(test_path: str = "tests/test_cli.py") -> str:
         except Exception as e:
             tool_log.log_result(f"error: {e}")
             return f"error: {e}"
+
+
+async def get_recent_bot_errors(n: int = 50) -> str:
+    """Return the last N lines of the Telegram bot error log for self-repair.
+
+    Use this when the user reports bot errors or when asked to fix the bot.
+    Errors are appended by the bot's error handler (tracebacks, etc.).
+    Then use read_file/write_file to fix the code and run_tests to verify.
+
+    Args:
+        n: Number of lines (default 50, max 200).
+    """
+    with log_tool_call("get_recent_bot_errors", str(n)) as tool_log:
+        n = min(max(1, n), 200)
+        out = get_bot_errors_tail(n)
+        tool_log.log_result(f"{len(out)} chars")
+        return out or "No bot errors logged yet."
 
 
 async def run_agent_subprocess(task: str) -> str:

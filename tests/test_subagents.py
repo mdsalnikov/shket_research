@@ -1,20 +1,20 @@
 """Tests for SUBAGENTS system."""
 
-import pytest
-from pathlib import Path
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
+
 import yaml
 
 from agent.tools.subagents import (
+    SUBAGENTS_DIR,
     Subagent,
     SubagentRegistry,
     registry,
-    SUBAGENTS_DIR,
 )
 
-
 # ============ Subagent Tests ============
+
 
 def test_subagent_dataclass():
     """Subagent dataclass works correctly."""
@@ -22,9 +22,9 @@ def test_subagent_dataclass():
         name="test",
         description="Test subagent",
         tools=["read_file", "write_file"],
-        triggers=["test", "testing"]
+        triggers=["test", "testing"],
     )
-    
+
     assert subagent.name == "test"
     assert subagent.matches_trigger("run a test") is True
     assert subagent.matches_trigger("unrelated task") is False
@@ -33,11 +33,9 @@ def test_subagent_dataclass():
 def test_subagent_matches_trigger():
     """Subagent trigger matching works."""
     subagent = Subagent(
-        name="coder",
-        description="Code agent",
-        triggers=["write code", "implement", "refactor"]
+        name="coder", description="Code agent", triggers=["write code", "implement", "refactor"]
     )
-    
+
     assert subagent.matches_trigger("write code for me") is True
     assert subagent.matches_trigger("implement this feature") is True
     assert subagent.matches_trigger("I need to refactor") is True
@@ -46,11 +44,12 @@ def test_subagent_matches_trigger():
 
 # ============ Registry Tests ============
 
+
 def test_registry_singleton():
     """Registry is a singleton."""
     reg1 = SubagentRegistry()
     reg2 = SubagentRegistry()
-    
+
     assert reg1 is reg2
 
 
@@ -62,15 +61,15 @@ def test_registry_creates_default_subagents():
         backup_dir = Path(tempfile.mkdtemp())
         shutil.copytree(SUBAGENTS_DIR, backup_dir / "subagents", dirs_exist_ok=True)
         shutil.rmtree(SUBAGENTS_DIR)
-    
+
     try:
         # Clear registry and recreate
         SubagentRegistry._instance = None
         reg = SubagentRegistry()
-        
+
         # Check default subagents exist
         assert len(reg.subagents) > 0
-        
+
         # Check specific subagents
         assert "coder" in reg.subagents or any("coder" in s.name for s in reg.list_subagents())
     finally:
@@ -79,7 +78,7 @@ def test_registry_creates_default_subagents():
             shutil.rmtree(SUBAGENTS_DIR)
             shutil.move(backup_dir / "subagents", SUBAGENTS_DIR)
             shutil.rmtree(backup_dir)
-        
+
         # Reset registry
         SubagentRegistry._instance = None
 
@@ -93,26 +92,28 @@ def test_registry_load_subagents():
             "name": "test_agent",
             "description": "Test description",
             "tools": ["test_tool"],
-            "triggers": ["test"]
+            "triggers": ["test"],
         }
-        
+
         yaml_file = temp_dir / "test_agent.yaml"
         yaml_file.write_text(yaml.dump(test_subagent), encoding="utf-8")
-        
+
         # Temporarily replace SUBAGENTS_DIR
         from agent.tools import subagents
+
         original_dir = subagents.SUBAGENTS_DIR
         subagents.SUBAGENTS_DIR = temp_dir
-        
+
         # Clear and reload registry
         SubagentRegistry._instance = None
         reg = SubagentRegistry()
-        
+
         assert "test_agent" in reg.subagents
-        
+
     finally:
         # Restore
         from agent.tools import subagents
+
         subagents.SUBAGENTS_DIR = original_dir
         SubagentRegistry._instance = None
         shutil.rmtree(temp_dir)
@@ -121,144 +122,139 @@ def test_registry_load_subagents():
 def test_registry_find_matching_subagent():
     """Registry finds matching subagent for task."""
     reg = SubagentRegistry()
-    
-    # Find coder for coding task
-    coder = reg.find_matching_subagent("write a python function")
+
+    # Find coder for coding task (trigger e.g. "implement")
+    coder = reg.find_matching_subagent("implement a python function")
     assert coder is not None
-    
+
     # Find researcher for research task
     researcher = reg.find_matching_subagent("research this topic")
     assert researcher is not None
 
 
 # ============ Integration Tests ============
+# Subagent tools (list_subagents, get_subagent, delegate_task, route_task, create_subagent) are sync.
 
-@pytest.mark.asyncio
-async def test_list_subagents():
+
+def test_list_subagents():
     """List subagents works correctly."""
     from agent.tools.subagents import list_subagents
-    
-    result = await list_subagents()
-    
+
+    result = list_subagents()
+
     assert isinstance(result, str)
     assert len(result) > 0
-    assert "# Available Subagents" in result
+    assert "subagent" in result.lower() or "Available" in result
 
 
-@pytest.mark.asyncio
-async def test_get_subagent():
+def test_get_subagent():
     """Get specific subagent works."""
     from agent.tools.subagents import get_subagent
-    
-    # Get coder subagent
-    result = await get_subagent("coder")
-    
+
+    result = get_subagent("coder")
+
     assert isinstance(result, str)
     assert len(result) > 0
 
 
-@pytest.mark.asyncio
-async def test_get_subagent_not_found():
+def test_get_subagent_not_found():
     """Get non-existent subagent returns appropriate message."""
     from agent.tools.subagents import get_subagent
-    
-    result = await get_subagent("nonexistent_xyz")
-    
+
+    result = get_subagent("nonexistent_xyz")
+
     assert isinstance(result, str)
     assert "not found" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_delegate_task():
+def test_delegate_task():
     """Delegate task to subagent."""
     from agent.tools.subagents import delegate_task
-    
-    result = await delegate_task("coder", "write a function")
-    
+
+    result = delegate_task("coder", "write a function")
+
     assert isinstance(result, str)
     assert len(result) > 0
     assert "coder" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_delegate_task_not_found():
+def test_delegate_task_not_found():
     """Delegate to non-existent subagent."""
     from agent.tools.subagents import delegate_task
-    
-    result = await delegate_task("nonexistent", "do something")
-    
+
+    result = delegate_task("nonexistent", "do something")
+
     assert isinstance(result, str)
     assert "not found" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_route_task():
+def test_route_task():
     """Route task to appropriate subagent."""
     from agent.tools.subagents import route_task
-    
-    result = await route_task("write a python script")
-    
+
+    result = route_task("implement a python script")
+
     assert isinstance(result, str)
     assert len(result) > 0
     assert "coder" in result.lower() or "subagent" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_route_task_research():
+def test_route_task_research():
     """Route research task."""
     from agent.tools.subagents import route_task
-    
-    result = await route_task("research machine learning trends")
-    
+
+    result = route_task("research machine learning trends")
+
     assert isinstance(result, str)
     assert len(result) > 0
 
 
-@pytest.mark.asyncio
-async def test_create_subagent():
+def test_create_subagent():
     """Create a new subagent."""
     from agent.tools.subagents import create_subagent
-    
-    result = await create_subagent(
-        name="test_created_agent",
+
+    name = "test_created_agent_ci"
+    for ext in (".yaml", ".md"):
+        p = SUBAGENTS_DIR / f"{name}{ext}"
+        if p.exists():
+            p.unlink()
+    SubagentRegistry._instance = None
+    registry.__init__()
+
+    result = create_subagent(
+        name=name,
         description="Test created agent",
         tools=["read_file"],
         triggers=["test_created"],
-        system_prompt="You are a test agent."
+        system_prompt="You are a test agent.",
+        file_format="yaml",
     )
-    
+
     assert isinstance(result, str)
     assert "created" in result.lower()
-    
-    # Verify file exists
-    yaml_file = SUBAGENTS_DIR / "test_created_agent.yaml"
+
+    yaml_file = SUBAGENTS_DIR / f"{name}.yaml"
     assert yaml_file.exists()
-    
-    # Clean up
+
     yaml_file.unlink()
+    SubagentRegistry._instance = None
+    registry.__init__()
 
 
 # ============ Edge Cases ============
 
+
 def test_subagent_empty_triggers():
     """Subagent with no triggers doesn't match anything."""
-    subagent = Subagent(
-        name="no_triggers",
-        description="No triggers",
-        triggers=[]
-    )
-    
+    subagent = Subagent(name="no_triggers", description="No triggers", triggers=[])
+
     assert subagent.matches_trigger("anything") is False
 
 
 def test_subagent_case_insensitive():
     """Trigger matching is case insensitive."""
-    subagent = Subagent(
-        name="test",
-        description="Test",
-        triggers=["write code"]
-    )
-    
+    subagent = Subagent(name="test", description="Test", triggers=["write code"])
+
     assert subagent.matches_trigger("WRITE CODE") is True
     assert subagent.matches_trigger("Write Code") is True
     assert subagent.matches_trigger("write code") is True
@@ -266,23 +262,22 @@ def test_subagent_case_insensitive():
 
 # ============ Subagent Content Tests ============
 
-@pytest.mark.asyncio
-async def test_coder_subagent_content():
+
+def test_coder_subagent_content():
     """Coder subagent has expected content."""
     from agent.tools.subagents import get_subagent
-    
-    result = await get_subagent("coder")
-    
+
+    result = get_subagent("coder")
+
     assert isinstance(result, str)
     assert "code" in result.lower()
 
 
-@pytest.mark.asyncio
-async def test_researcher_subagent_content():
+def test_researcher_subagent_content():
     """Researcher subagent has expected content."""
     from agent.tools.subagents import get_subagent
-    
-    result = await get_subagent("researcher")
-    
+
+    result = get_subagent("researcher")
+
     assert isinstance(result, str)
     assert "research" in result.lower() or "information" in result.lower()

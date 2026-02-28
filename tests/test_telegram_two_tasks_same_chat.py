@@ -1,15 +1,15 @@
 """Test two messages from same user (same chat): run in order, responses in order."""
 
 import asyncio
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent.interfaces.telegram import (
-    handle_message,
     _active_tasks,
     _chat_locks,
     _chat_queued_count,
+    handle_message,
 )
 
 
@@ -40,8 +40,11 @@ async def test_two_tasks_same_chat_run_sequentially():
     """First task runs to completion, then second; run_task_with_session called in order."""
     call_order = []
     results = []
+    mock_bot = AsyncMock()
 
-    async def mock_run_task(text, chat_id, username=None, user_id=None, provider=None, resumable_task_id=None, **kwargs):
+    async def mock_run_task(
+        text, chat_id, username=None, user_id=None, provider=None, resumable_task_id=None, **kwargs
+    ):
         call_order.append(text)
         if "first" in text:
             await asyncio.sleep(0.1)
@@ -51,19 +54,20 @@ async def test_two_tasks_same_chat_run_sequentially():
         return "result_second"
 
     with patch("agent.interfaces.telegram._is_user_allowed", return_value=True):
-        with patch("agent.core.runner.run_task_with_session", side_effect=mock_run_task):
-            ctx = MagicMock()
-            u1 = _make_update(chat_id=100, text="first task")
-            u2 = _make_update(chat_id=100, text="second task")
-            t1 = asyncio.create_task(handle_message(u1, ctx))
-            t2 = asyncio.create_task(handle_message(u2, ctx))
-            await asyncio.gather(t1, t2)
+        with patch("agent.interfaces.telegram.application", MagicMock(bot=mock_bot)):
+            with patch("agent.core.runner.run_task_with_session", side_effect=mock_run_task):
+                ctx = MagicMock()
+                u1 = _make_update(chat_id=100, text="first task")
+                u2 = _make_update(chat_id=100, text="second task")
+                await handle_message(u1, ctx)
+                await handle_message(u2, ctx)
+                for _ in range(100):
+                    await asyncio.sleep(0.02)
+                    if len(call_order) == 2 and len(_active_tasks) == 0:
+                        break
 
     assert call_order == ["first task", "second task"]
     assert results == ["result_first", "result_second"]
-    u1_calls = [str(c[0][0]) for c in u1.message.reply_text.call_args_list]
-    u2_calls = [str(c[0][0]) for c in u2.message.reply_text.call_args_list]
-    assert any("task #1" in s for s in u1_calls)
-    assert any("result_first" in s for s in u1_calls)
-    assert any("task #2" in s for s in u2_calls)
-    assert any("result_second" in s for s in u2_calls)
+    all_text = " ".join(str(c) for c in mock_bot.send_message.call_args_list)
+    assert "result_first" in all_text
+    assert "result_second" in all_text

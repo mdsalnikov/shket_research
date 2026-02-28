@@ -14,19 +14,18 @@ import logging
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from agent.config import (
-    DEFAULT_MODEL,
     OPENROUTER_API_KEY,
     OPENROUTER_MODEL_NAME,
-    VLLM_BASE_URL,
-    VLLM_MODEL_NAME,
-    VLLM_API_KEY,
     PROVIDER_DEFAULT,
     VERSION,
+    VLLM_API_KEY,
+    VLLM_BASE_URL,
+    VLLM_MODEL_NAME,
 )
 from agent.dependencies import AgentDeps
 from agent.tools import register_tools
@@ -110,6 +109,10 @@ Subagents:
 - Use delegate_task for explicit delegation
 - Subagents have isolated context and specialized capabilities
 - CODE-SIMPLIFIER: After self-modification, ALWAYS delegate to code-simplifier subagent
+- SELF-REPAIR: When the user reports bot errors, tracebacks, or "errors in the logs", delegate to
+  the self-repair subagent: delegate_task("self-repair", "Fix the errors in the logs. Use
+  get_recent_bot_errors(80), find traceback, fix file and line, run tests and run_agent_subprocess.")
+  Or use route_task("fix the errors in the logs") which routes to self-repair.
 
 =============================================================================
 SELF-MODIFICATION PROTOCOL (when asked to change YOURSELF)
@@ -128,7 +131,8 @@ PHASE 1 — PREPARE (never skip):
 PHASE 2 — EDIT & VERIFY:
 4. **Make changes** — use write_file only for the files you need to change
 5. **Update VERSION** — bump PATCH (bugfix), MINOR (feature), or MAJOR (breaking); update VERSION file
-6. **run_tests()** — use run_tests("tests/test_cli.py") and for agent code also run_tests("tests/test_session.py")
+6. **run_tests()** — use run_tests("tests/test_cli.py") and for agent code also
+   run_tests("tests/test_session.py")
    (or run_tests("tests/") for full suite). Do not push until tests pass.
 7. **run_agent_subprocess("run status")** — mandatory: run the agent in a fresh subprocess with
    a concrete task so the NEW code is loaded and exercised. Use exactly "run status" or similar
@@ -159,6 +163,15 @@ ROLLBACK (if anything fails after you edited files):
 - Use restore_from_backup(backup_dir) with the backup dir you created (e.g. from list_backups()).
 - Then fix the code and re-run tests; do not push until everything passes.
 
+BOT / LOG SELF-REPAIR (when user reports Telegram bot errors or errors in logs):
+- Prefer delegating to the self-repair subagent: delegate_task("self-repair", "Fix the errors in the
+  logs. Use get_recent_bot_errors(80), find traceback, fix file and line, run tests and
+  run_agent_subprocess.")
+- Alternatively route_task("fix bot errors") or route_task("errors in the logs") to route to
+  self-repair.
+- If you handle it yourself: get_recent_bot_errors(n), identify file:line from traceback, read_file,
+  fix, write_file, run_tests, run_agent_subprocess("run status"). If TG bot: request_restart() after.
+
 RULES:
 - Do not remove or weaken backup, list_backups, restore_from_backup, or this protocol.
 - Never skip backup_codebase(), run_tests(), run_agent_subprocess(), or code-simplifier delegation
@@ -169,18 +182,18 @@ RULES:
 
 def create_agent(provider: str | None = None, model_name: str | None = None) -> Agent[AgentDeps]:
     """Create and configure the agent with tools and system prompt.
-    
+
     Args:
         provider: Provider to use ("vllm" or "openrouter"). Defaults to PROVIDER_DEFAULT.
         model_name: Optional model name override.
-    
+
     Returns:
         Configured Pydantic AI agent instance.
     """
     # Determine provider
     if provider is None:
         provider = PROVIDER_DEFAULT
-    
+
     # Create model based on provider
     if provider.lower() == "openrouter":
         api_key = OPENROUTER_API_KEY
@@ -200,31 +213,31 @@ def create_agent(provider: str | None = None, model_name: str | None = None) -> 
                 api_key=VLLM_API_KEY,
             ),
         )
-    
+
     logger.info(f"Creating agent with provider={provider}, model={model_name}")
-    
+
     # Create agent with system prompt
     agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT.format(version=VERSION),
         deps_type=AgentDeps,
     )
-    
+
     # Register all tools
     register_tools(agent)
-    
+
     return agent
 
 
 async def build_session_agent(provider: str | None = None) -> Agent[AgentDeps]:
     """Build agent for session-based runs.
-    
+
     This is an async wrapper around create_agent for compatibility
     with session-based runner code.
-    
+
     Args:
         provider: Provider to use ("vllm" or "openrouter").
-    
+
     Returns:
         Configured Pydantic AI agent instance.
     """

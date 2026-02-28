@@ -2,7 +2,7 @@
 
 Autonomous LLM-powered research agent for executing tasks on an Ubuntu server. Supports CLI, Telegram bot, and deep research capabilities.
 
-> **Version**: 0.4.5 | **License**: MIT | **Python**: 3.11+
+> **Version**: 0.4.6 | **License**: MIT | **Python**: 3.11+
 
 ---
 
@@ -241,6 +241,35 @@ python -m agent run "run status"
 python -m agent bot
 ```
 
+### Scheduled self-repair (cron)
+
+Hourly check: if there are errors in `logs/bot_errors.log`, the agent fixes them, runs tests, creates a branch and PR; the script then merges the PR, pulls main, and optionally restarts the service.
+
+```bash
+# Run once (check logs, run agent; if repair done, merge PR and restart)
+python -m agent self-repair-check
+
+# Dry-run: only run agent, do not merge or restart
+python -m agent self-repair-check --dry-run
+
+# With provider
+python -m agent self-repair-check --provider openrouter
+```
+
+**Cron (every hour):**
+
+```cron
+0 * * * * cd /path/to/shket_research && python -m agent self-repair-check
+```
+
+**Environment:**
+
+| Variable      | Description                                                                 |
+|---------------|-----------------------------------------------------------------------------|
+| `RESTART_CMD` | Optional. Command to run after merge (e.g. `systemctl --user restart shket-bot` or `sudo systemctl restart shket-bot`). If unset, only merge and pull are done. |
+
+Flow: `need_self_repair()` reads `logs/bot_errors.log`; if it contains tracebacks/errors, the agent runs the self-repair task (backup, fix, tests, branch, commit, push, create PR). The script merges the PR for the current branch, checks out main, pulls, and runs `RESTART_CMD` if set.
+
 ---
 
 ## Testing Guidelines
@@ -470,6 +499,7 @@ info = recall("project status", category="Project")
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.4.6 | 2026-02-28 | Self-repair: bot error log, /errors, self-repair subagent, cron self-repair-check (merge PR, RESTART_CMD) |
 | 0.4.5 | 2025-01-XX | Added code-simplifier subagent, mandatory after self-mod |
 | 0.4.4 | 2025-01-XX | Browser tool integration (8 tools), progress tracking |
 | 0.4.2 | 2025-01-XX | Self-healing enhancements, network/timeout handling |

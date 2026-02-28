@@ -1,11 +1,11 @@
 """Tests for session management with OpenClaw-inspired architecture."""
 
-import asyncio
 import os
 import tempfile
+
 import pytest
 
-from agent.session import SessionMessage, MemoryEntry, MEMORY_CATEGORIES
+from agent.session import MEMORY_CATEGORIES, MemoryEntry, SessionMessage
 from agent.session_db import SessionDB
 
 
@@ -31,6 +31,7 @@ async def session_db(temp_db):
 
 # ============ Session Tests ============
 
+
 @pytest.mark.asyncio
 async def test_session_creation(session_db):
     """Test creating a session."""
@@ -47,7 +48,7 @@ async def test_session_key_format(session_db):
     """Test OpenClaw-style session key format."""
     session_id = await session_db.get_or_create_session(12345, scope="main", agent_id="shket")
     session = await session_db.get_session(session_id)
-    
+
     assert session is not None
     assert session["session_key"] == "agent:shket:main:12345"
     assert session["agent_id"] == "shket"
@@ -59,17 +60,17 @@ async def test_session_scopes(session_db):
     """Test different session scopes (OpenClaw dmScope concept)."""
     # Main scope
     session_main = await session_db.get_or_create_session(12345, scope="main")
-    
+
     # Per-peer scope
     session_peer = await session_db.get_or_create_session(12345, scope="per-peer")
-    
+
     # Should be different sessions
     assert session_main != session_peer
-    
+
     # Verify keys
     main_data = await session_db.get_session(session_main)
     peer_data = await session_db.get_session(session_peer)
-    
+
     assert "main" in main_data["session_key"]
     assert "per-peer" in peer_data["session_key"]
 
@@ -197,15 +198,15 @@ async def test_session_isolation(session_db):
 async def test_message_count_tracking(session_db):
     """Test that message_count is tracked in session metadata."""
     session_id = await session_db.get_or_create_session(12345)
-    
+
     # Check initial count
     session = await session_db.get_session(session_id)
     assert session["message_count"] == 0
-    
+
     # Add messages
     await session_db.add_message(session_id, "user", "Message 1")
     await session_db.add_message(session_id, "assistant", "Message 2")
-    
+
     # Check updated count
     session = await session_db.get_session(session_id)
     assert session["message_count"] == 2
@@ -215,17 +216,17 @@ async def test_message_count_tracking(session_db):
 async def test_clear_session(session_db):
     """Test clearing a session."""
     session_id = await session_db.get_or_create_session(12345)
-    
+
     await session_db.add_message(session_id, "user", "Message 1")
     await session_db.add_message(session_id, "user", "Message 2")
-    
+
     # Clear
     await session_db.clear_session(session_id)
-    
+
     # Verify messages are gone
     messages = await session_db.get_messages(session_id)
     assert len(messages) == 0
-    
+
     # Verify session still exists
     session = await session_db.get_session(session_id)
     assert session is not None
@@ -246,6 +247,7 @@ async def test_model_message_history_storage(session_db):
 
 
 # ============ Memory Tests ============
+
 
 @pytest.mark.asyncio
 async def test_memory_save_and_retrieve(session_db):
@@ -273,7 +275,9 @@ async def test_memory_search(session_db):
     """Test memory search functionality with FTS5."""
     # Add multiple memory entries
     entries = [
-        MemoryEntry(key="api_config", category="Environment", l0_abstract="API configuration for services"),
+        MemoryEntry(
+            key="api_config", category="Environment", l0_abstract="API configuration for services"
+        ),
         MemoryEntry(key="project_status", category="Project", l0_abstract="Current project status"),
         MemoryEntry(key="api_keys", category="Security", l0_abstract="API keys management"),
     ]
@@ -343,12 +347,12 @@ async def test_memory_access_count(session_db):
         l0_abstract="Test abstract",
     )
     await session_db.save_memory(entry)
-    
+
     # Retrieve multiple times
     await session_db.get_memory("test_key")
     await session_db.get_memory("test_key")
     await session_db.get_memory("test_key")
-    
+
     retrieved = await session_db.get_memory("test_key")
     assert retrieved.access_count == 4  # 3 retrievals + this one
 
@@ -362,15 +366,15 @@ async def test_memory_delete(session_db):
         l0_abstract="Test abstract",
     )
     await session_db.save_memory(entry)
-    
+
     # Verify it exists
     retrieved = await session_db.get_memory("test_key")
     assert retrieved is not None
-    
+
     # Delete
     deleted = await session_db.delete_memory("test_key")
     assert deleted is True
-    
+
     # Verify it's gone
     retrieved = await session_db.get_memory("test_key")
     assert retrieved is None
@@ -387,7 +391,7 @@ async def test_memory_categories(session_db):
             l0_abstract=f"Test for {category}",
         )
         await session_db.save_memory(entry)
-    
+
     # Verify all saved
     categories = await session_db.get_all_categories()
     for category in MEMORY_CATEGORIES:
@@ -395,6 +399,7 @@ async def test_memory_categories(session_db):
 
 
 # ============ SessionMessage Tests ============
+
 
 def test_session_message_to_dict():
     """Test SessionMessage serialization."""
@@ -405,7 +410,7 @@ def test_session_message_to_dict():
         tool_name="test_tool",
         tool_params={"key": "value"},
     )
-    
+
     data = msg.to_dict()
     assert data["role"] == "user"
     assert data["content"] == "Hello"
@@ -420,7 +425,7 @@ def test_session_message_from_dict():
         "content": "Hi there",
         "timestamp": 12345.0,
     }
-    
+
     msg = SessionMessage.from_dict(data)
     assert msg.role == "assistant"
     assert msg.content == "Hi there"
@@ -434,7 +439,7 @@ def test_session_message_to_model_message():
         tool_name="test_tool",
         tool_result="success",
     )
-    
+
     model_msg = msg.to_model_message()
     assert model_msg["role"] == "tool"
     assert model_msg["content"] == "Result"
@@ -442,6 +447,7 @@ def test_session_message_to_model_message():
 
 
 # ============ MemoryEntry Tests ============
+
 
 def test_memory_entry_to_dict():
     """Test MemoryEntry serialization."""
@@ -453,7 +459,7 @@ def test_memory_entry_to_dict():
         l2_details="Details",
         confidence=0.9,
     )
-    
+
     data = entry.to_dict()
     assert data["key"] == "test"
     assert data["category"] == "Project"
@@ -470,7 +476,7 @@ def test_memory_entry_from_dict():
         "confidence": 0.8,
         "access_count": 5,
     }
-    
+
     entry = MemoryEntry.from_dict(data)
     assert entry.key == "test"
     assert entry.category == "Project"

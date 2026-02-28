@@ -1,20 +1,20 @@
 """Tests for SKILLS system."""
 
-import pytest
-from pathlib import Path
-import tempfile
 import shutil
-import os
+import tempfile
+from pathlib import Path
+
+import pytest
 
 from agent.tools.skills import (
-    Skill,
-    _parse_skill_file,
-    _create_default_skills,
     SKILLS_DIR,
+    Skill,
+    _create_default_skills,
+    _parse_skill_file,
 )
 
-
 # ============ Skill Parsing Tests ============
+
 
 def test_parse_skill_file():
     """Skill file is parsed correctly."""
@@ -23,7 +23,7 @@ def test_parse_skill_file():
         # Create test skill file in a category subdirectory
         category_dir = Path(temp_dir) / "programming"
         category_dir.mkdir()
-        
+
         skill_content = """# Test Skill
 
 ## Description
@@ -38,9 +38,9 @@ This is a test skill description.
 """
         skill_path = category_dir / "test_skill.md"
         skill_path.write_text(skill_content, encoding="utf-8")
-        
+
         skill = _parse_skill_file(skill_path)
-        
+
         assert skill is not None
         assert skill.name == "Test Skill"
         assert skill.category == "programming"
@@ -59,12 +59,9 @@ def test_parse_skill_file_missing():
 def test_skill_dataclass():
     """Skill dataclass works correctly."""
     skill = Skill(
-        name="Test",
-        category="programming",
-        description="Test description",
-        path=Path("/test.md")
+        name="Test", category="programming", description="Test description", path=Path("/test.md")
     )
-    
+
     assert skill.name == "Test"
     assert skill.category == "programming"
     assert skill.related_skills == []
@@ -72,12 +69,13 @@ def test_skill_dataclass():
 
 # ============ Skills Directory Tests ============
 
+
 def test_skills_dir_created():
     """Skills directory is created if it doesn't exist."""
     from agent.tools.skills import _ensure_skills_dir
-    
+
     _ensure_skills_dir()
-    
+
     assert SKILLS_DIR.exists()
     assert (SKILLS_DIR / "programming").exists()
     assert (SKILLS_DIR / "research").exists()
@@ -85,23 +83,22 @@ def test_skills_dir_created():
 
 def test_default_skills_created():
     """Default skills are created if directory is empty."""
-    from agent.tools.skills import _create_default_skills
-    
+
     # Backup existing skills
     backup_dir = None
     if SKILLS_DIR.exists() and any(SKILLS_DIR.glob("**/*.md")):
         backup_dir = Path(tempfile.mkdtemp())
         shutil.copytree(SKILLS_DIR, backup_dir / "skills", dirs_exist_ok=True)
         shutil.rmtree(SKILLS_DIR)
-    
+
     try:
         # Create default skills
         _create_default_skills()
-        
+
         # Check that skills were created
         skill_files = list(SKILLS_DIR.glob("**/*.md"))
         assert len(skill_files) > 0
-        
+
         # Check specific skills exist
         python_skill = SKILLS_DIR / "programming" / "python.md"
         assert python_skill.exists()
@@ -115,13 +112,14 @@ def test_default_skills_created():
 
 # ============ Integration Tests ============
 
+
 @pytest.mark.asyncio
 async def test_list_skills():
     """List skills works correctly."""
     from agent.tools.skills import list_skills
-    
+
     result = await list_skills()
-    
+
     assert isinstance(result, str)
     assert len(result) > 0
     assert "# Available Skills" in result
@@ -131,9 +129,9 @@ async def test_list_skills():
 async def test_list_skills_by_category():
     """List skills filtered by category."""
     from agent.tools.skills import list_skills
-    
+
     result = await list_skills("programming")
-    
+
     assert isinstance(result, str)
     assert len(result) > 0
 
@@ -142,10 +140,10 @@ async def test_list_skills_by_category():
 async def test_get_skill():
     """Get specific skill works."""
     from agent.tools.skills import get_skill
-    
+
     # Get python skill (should exist as default)
     result = await get_skill("python")
-    
+
     assert isinstance(result, str)
     assert len(result) > 0
 
@@ -154,9 +152,9 @@ async def test_get_skill():
 async def test_get_skill_not_found():
     """Get non-existent skill returns appropriate message."""
     from agent.tools.skills import get_skill
-    
+
     result = await get_skill("nonexistent_skill_xyz")
-    
+
     assert isinstance(result, str)
     assert "not found" in result.lower()
 
@@ -165,9 +163,9 @@ async def test_get_skill_not_found():
 async def test_find_relevant_skills():
     """Find relevant skills for a task."""
     from agent.tools.skills import find_relevant_skills
-    
+
     result = await find_relevant_skills("write a python script to process data")
-    
+
     assert isinstance(result, str)
     assert len(result) > 0
 
@@ -176,9 +174,9 @@ async def test_find_relevant_skills():
 async def test_find_relevant_skills_git():
     """Find git skill for git task."""
     from agent.tools.skills import find_relevant_skills
-    
+
     result = await find_relevant_skills("how do I merge branches in git")
-    
+
     assert isinstance(result, str)
     # Should mention git skill
     assert "git" in result.lower() or "relevant" in result.lower()
@@ -188,20 +186,18 @@ async def test_find_relevant_skills_git():
 async def test_create_skill():
     """Create a new skill."""
     from agent.tools.skills import create_skill
-    
+
     result = await create_skill(
-        name="test_skill",
-        category="testing",
-        content="# Test Skill\n\nTest content."
+        name="test_skill", category="testing", content="# Test Skill\n\nTest content."
     )
-    
+
     assert isinstance(result, str)
     assert "created" in result.lower()
-    
+
     # Verify file exists
     skill_path = SKILLS_DIR / "testing" / "test_skill.md"
     assert skill_path.exists()
-    
+
     # Clean up
     skill_path.unlink()
     if not list((SKILLS_DIR / "testing").iterdir()):
@@ -210,18 +206,19 @@ async def test_create_skill():
 
 # ============ Edge Cases ============
 
+
 def test_parse_empty_skill_file():
     """Empty skill file is handled."""
     temp_dir = tempfile.mkdtemp()
     try:
         category_dir = Path(temp_dir) / "test_cat"
         category_dir.mkdir()
-        
+
         skill_path = category_dir / "empty.md"
         skill_path.write_text("", encoding="utf-8")
-        
+
         skill = _parse_skill_file(skill_path)
-        
+
         assert skill is not None
         assert skill.content == ""
     finally:
@@ -234,7 +231,7 @@ def test_parse_skill_with_special_chars():
     try:
         category_dir = Path(temp_dir) / "special_cat"
         category_dir.mkdir()
-        
+
         skill_content = """# Skill With Special Chars: Ñ
 
 ## Description
@@ -242,9 +239,9 @@ Contains unicode: émojis 🎉 and Cyrillic: Привет
 """
         skill_path = category_dir / "special.md"
         skill_path.write_text(skill_content, encoding="utf-8")
-        
+
         skill = _parse_skill_file(skill_path)
-        
+
         assert skill is not None
         assert "unicode" in skill.content.lower()
     finally:
@@ -253,13 +250,14 @@ Contains unicode: émojis 🎉 and Cyrillic: Привет
 
 # ============ Skill Content Tests ============
 
+
 @pytest.mark.asyncio
 async def test_python_skill_content():
     """Python skill has expected content."""
     from agent.tools.skills import get_skill
-    
+
     result = await get_skill("python")
-    
+
     # Should contain expected sections
     assert "Description" in result or "description" in result.lower()
     assert "When to Use" in result or "when to use" in result.lower()
@@ -269,9 +267,9 @@ async def test_python_skill_content():
 async def test_git_skill_content():
     """Git skill has expected content."""
     from agent.tools.skills import get_skill
-    
+
     result = await get_skill("git")
-    
+
     # Should contain expected sections
     assert isinstance(result, str)
     assert len(result) > 0

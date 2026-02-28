@@ -37,6 +37,7 @@ MAX_RETRIES = int(os.getenv("AGENT_MAX_RETRIES", "10"))
 # Project root: directory containing agent/ package (works from any cwd)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "agent.log")
+BOT_ERRORS_LOG = os.path.join(PROJECT_ROOT, "logs", "bot_errors.log")
 
 # Whitelist for TG bot - comma-separated usernames (without @)
 # Example: TG_WHITELIST=mdsalnikov,user2,user3
@@ -69,6 +70,7 @@ VERSION = _get_version()
 
 def setup_logging() -> None:
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(BOT_ERRORS_LOG), exist_ok=True)
     logging.basicConfig(
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         level=logging.INFO,

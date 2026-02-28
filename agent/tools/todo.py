@@ -36,7 +36,7 @@ async def create_todo(tasks: list[str]) -> str:
         logger.info("Tool create_todo: %d steps", len(tasks))
         data = {"tasks": tasks, "done": []}
         _save(data)
-        lines = [f"{i+1}. [ ] {t}" for i, t in enumerate(tasks)]
+        lines = [f"{i + 1}. [ ] {t}" for i, t in enumerate(tasks)]
         full = "TODO created:\n" + "\n".join(lines)
         tool_log.log_result(f"{len(tasks)} steps")
         return full
@@ -52,7 +52,7 @@ async def get_todo() -> str:
         if not tasks:
             tool_log.log_result("empty")
             return "No TODO list. Use create_todo to start one."
-        lines = [f"{i+1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
+        lines = [f"{i + 1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
         full = "TODO:\n" + "\n".join(lines)
         tool_log.log_result(f"{len(done)}/{len(tasks)} done")
         return full
@@ -77,6 +77,6 @@ async def mark_todo_done(step_index: int) -> str:
         data["done"] = sorted(done)
         _save(data)
         remaining = len(tasks) - len(done)
-        lines = [f"{i+1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
+        [f"{i + 1}. {'[x]' if i in done else '[ ]'} {t}" for i, t in enumerate(tasks)]
         tool_log.log_result(f"{len(done)}/{len(tasks)} done, {remaining} remaining")
         return f"Step {step_index} marked done. {remaining} steps remaining."

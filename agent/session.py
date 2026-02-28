@@ -4,7 +4,7 @@ This module provides session persistence using SQLite, following OpenClaw's
 session management concepts:
 - One session per agent/chat with SQLite persistence
 - Conversation history with configurable limits
-- Tool call logging and retrieval  
+- Tool call logging and retrieval
 - L0/L1/L2 memory hierarchy for agent memory
 - FTS5 for fast text search
 - Session isolation per chat_id (DM) or channel
@@ -18,18 +18,10 @@ Key concepts from OpenClaw:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Iterator, Optional
-
-import aiosqlite
 
 from agent.config import PROJECT_ROOT
 
@@ -41,7 +33,7 @@ DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "sessions.db")
 # Memory hierarchy levels (inspired by OpenClaw/OpenViking)
 MEMORY_L0 = "abstract"  # One-line summary
 MEMORY_L1 = "overview"  # Category-based summary (2-3 sentences)
-MEMORY_L2 = "details"   # Full content
+MEMORY_L2 = "details"  # Full content
 
 # Memory categories from OpenClaw
 MEMORY_CATEGORIES = ["System", "Environment", "Skill", "Project", "Comm", "Security"]
@@ -55,11 +47,12 @@ SCOPE_PER_CHANNEL_PEER = "per-channel-peer"
 @dataclass
 class SessionMessage:
     """A single message in a session.
-    
+
     Supports standard roles (user/assistant/system) and tool calls
     with full parameter and result logging.
-    
+
     """
+
     role: str  # "user", "assistant", "system", "tool"
     content: str
     timestamp: float = field(default_factory=time.time)
@@ -95,9 +88,9 @@ class SessionMessage:
 
     def to_model_message(self) -> dict:
         """Convert to format suitable for LLM context.
-        
+
         Returns a dict compatible with pydantic-ai message format.
-        
+
         """
         msg = {
             "role": self.role,
@@ -115,19 +108,20 @@ class SessionMessage:
 @dataclass
 class MemoryEntry:
     """Memory entry with L0/L1/L2 hierarchy.
-    
+
     Follows OpenClaw's memory architecture:
     - L0 (abstract): One-line summary for quick scanning
     - L1 (overview): 2-3 sentence overview for context
     - L2 (details): Full content for deep retrieval
-    
+
     Categories: System, Environment, Skill, Project, Comm, Security
-    
+
     """
-    key: str              # Unique memory key
-    category: str         # One of MEMORY_CATEGORIES
-    l0_abstract: str      # One-line summary (required)
-    l1_overview: str = "" # 2-3 sentence overview
+
+    key: str  # Unique memory key
+    category: str  # One of MEMORY_CATEGORIES
+    l0_abstract: str  # One-line summary (required)
+    l1_overview: str = ""  # 2-3 sentence overview
     l2_details: str = ""  # Full content
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)

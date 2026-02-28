@@ -13,7 +13,7 @@ Architecture:
     SelfHealingRunner → orchestrates everything
 """
 
-from agent.healing.classifier import ErrorClassifier, ErrorType, ClassifiedError
+from agent.healing.classifier import ClassifiedError, ErrorClassifier, ErrorType
 from agent.healing.compressor import ContextCompressor
 from agent.healing.fallback import FallbackHandler
 from agent.healing.strategies import HealingStrategy, SelfHealingRunner

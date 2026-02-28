@@ -37,7 +37,9 @@ async def _run_gh_auth_setup() -> tuple[int, str]:
     """Run 'gh auth setup-git' to configure git to use gh as credential helper."""
     env = _gh_token_env()
     proc = await asyncio.create_subprocess_exec(
-        "gh", "auth", "setup-git",
+        "gh",
+        "auth",
+        "setup-git",
         cwd=PROJECT_ROOT,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -156,12 +158,12 @@ async def git_push(branch: str | None = None) -> str:
     """
     with log_tool_call("git_push", branch or "current") as tool_log:
         logger.info("Tool git_push: %s", branch or "current")
-        
+
         # Ensure gh credential helper is configured for authentication
         auth_code, auth_out = await _run_gh_auth_setup()
         if auth_code != 0:
             logger.warning("gh auth setup-git returned: %s", auth_out)
-        
+
         # Now push using gh credential helper for authentication
         args = ["push", "origin", branch] if branch else ["push", "origin", "HEAD"]
         code, out = await _run_git(args)

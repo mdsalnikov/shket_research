@@ -2,8 +2,8 @@
 
 import asyncio
 import logging
-import os
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -11,23 +11,22 @@ from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent.activity_log import (
-    log_user_message,
-    log_agent_response,
-    log_task_start,
-    log_task_end,
     get_activity_log_tail,
+    get_bot_errors_tail,
+    log_task_end,
+    log_task_start,
 )
 from agent.config import (
-    LOG_FILE,
+    BOT_ERRORS_LOG,
     OPENROUTER_API_KEY,
+    PROVIDER_DEFAULT,
     TG_BOT_KEY,
     TG_WHITELIST,
-    setup_logging,
     VERSION,
-    PROVIDER_DEFAULT,
+    setup_logging,
 )
-from agent.session_globals import close_db
 from agent.progress import get_tracker
+from agent.session_globals import close_db
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,7 @@ BOT_COMMANDS = [
     BotCommand("context", "Контекст сессии (сообщения, токены)"),
     BotCommand("clear", "Очистить контекст сессии"),
     BotCommand("logs", "Последние N записей лога"),
+    BotCommand("errors", "Ошибки бота (для саморемонта)"),
     BotCommand("exportlogs", "Скачать полный лог"),
     BotCommand("panic", "Экстренная остановка"),
 ]
@@ -76,6 +76,7 @@ HELP_TEXT = (
     "/clear — очистить контекст\n\n"
     "*Логи:*\n"
     r"/logs \[N] — последние N строк (по умолчанию 30)" + "\n"
+    "/errors [N] — ошибки бота для саморемонта\n"
     "/exportlogs — скачать лог\n\n"
     "*Экстренно:* /panic\n\n"
     "Любое текстовое сообщение — задача агенту. Несколько задач параллельно.\n\n"
@@ -97,32 +98,89 @@ WHITELIST_ERROR = (
 
 def _is_user_allowed(username: str | None) -> bool:
     """Check if user is in whitelist.
-    
+
     Args:
         username: Telegram username (without @) or None
-        
+
     Returns:
         True if user is allowed or whitelist is empty (dev mode)
     """
     if not TG_WHITELIST:
         # No whitelist configured = allow all (development mode)
         return True
-    
+
     if not username:
         # User has no username = deny
         return False
-    
+
     return username.lower() in TG_WHITELIST
 
 
 MAX_RESUME_COUNT = 5
 
 
+def _build_resume_prompt(goal: str, resume_count: int) -> str:
+    """Build a resume prompt for continuing a task after restart.
+
+    Args:
+        goal: The original task goal
+        resume_count: How many times this task has been resumed
+
+    Returns:
+        A prompt string for resuming the task
+    """
+    return (
+        f"Resume the following task (Resume count: {resume_count}):\n\n"
+        f"Goal: {goal}\n\n"
+        "Continue from where you left off. Check your progress and complete the task."
+    )
+
+
+async def _do_resume(bot, task_row: dict) -> None:
+    """Resume a resumable task.
+
+    Args:
+        bot: Telegram bot instance
+        task_row: Task row from database with id, session_id, chat_id, goal, resume_count
+    """
+    from agent.core.runner import run_task_with_session
+    from agent.session_globals import get_db
+
+    db = await get_db()
+
+    # Check if max resume count reached
+    if task_row["resume_count"] >= MAX_RESUME_COUNT:
+        await bot.send_message(
+            chat_id=task_row["chat_id"],
+            text=f"❌ Task failed after {MAX_RESUME_COUNT} resume attempts:\n{task_row['goal']}",
+        )
+        await db.mark_resumable_task_failed(task_row["id"])
+        return
+
+    # Build resume prompt and run
+    prompt = _build_resume_prompt(task_row["goal"], task_row["resume_count"])
+
+    try:
+        result = await run_task_with_session(
+            prompt,
+            chat_id=task_row["chat_id"],
+            provider=_current_provider,
+            resumable_task_id=task_row["id"],
+        )
+        await bot.send_message(chat_id=task_row["chat_id"], text=f"✅ Task completed:\n{result}")
+        await db.mark_resumable_task_completed(task_row["id"])
+    except Exception as e:
+        await bot.send_message(
+            chat_id=task_row["chat_id"], text=f"❌ Task failed: {e}\nGoal: {task_row['goal']}"
+        )
+        await db.mark_resumable_task_failed(task_row["id"])
+
+
 async def _send_progress_update(chat_id: int, message: str) -> None:
     """Send progress update to Telegram chat.
-    
+
     This is the callback used by ProgressTracker to send updates.
-    
+
     Args:
         chat_id: Telegram chat ID
         message: Progress update message
@@ -191,38 +249,44 @@ def _get_chat_lock(chat_id: int) -> asyncio.Lock:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     username = user.username if user else None
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
-        logger.warning("Unauthorized /start from user: %s (id=%s)", username, user.id if user else "?")
+        logger.warning(
+            "Unauthorized /start from user: %s (id=%s)", username, user.id if user else "?"
+        )
         return
-    
-    provider_info = f"\n📡 Provider: *{_current_provider}*" if _current_provider != _effective_provider() else ""
+
+    provider_info = (
+        f"\n📡 Provider: *{_current_provider}*"
+        if _current_provider != _effective_provider()
+        else ""
+    )
     await update.message.reply_text(
         f"🤖 Shket Research Agent online.\nSend me a task or type /help for commands.{provider_info}",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     username = user.username if user else None
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
+
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     username = user.username if user else None
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
+
     uptime = int(time.time() - _start_time)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
@@ -231,171 +295,323 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     resumable_n = 0
     try:
         from agent.session_globals import get_db
+
         db = await get_db()
         resumable_n = len(await db.get_incomplete_resumable_tasks())
     except Exception:
         pass
     provider_status = f"📡 Provider: *{_current_provider}*\n"
-    resumable_line = f"\n📌 Resumable: {resumable_n} (will resume on next startup)" if resumable_n else ""
+    resumable_line = (
+        f"\n📌 Resumable: {resumable_n} (will resume on next startup)" if resumable_n else ""
+    )
     await update.message.reply_text(
         f"✅ Agent is running\n"
         f"⏱ Uptime: {h}h {m}m {s}s\n"
         f"{provider_status}"
         f"📋 Active: {running} running, {queued} queued"
         f"{resumable_line}",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
 
 async def provider_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Switch LLM provider between vllm and openrouter."""
     global _current_provider
-    
+
     user = update.effective_user
     username = user.username if user else None
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
-    
+
     # Get provider argument
     args = context.args if context.args else []
     if not args:
         await update.message.reply_text(
             f"Current provider: *{_current_provider}*\nUsage: /provider vllm|openrouter",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
         return
-    
+
     provider = args[0].lower()
     if provider not in ("vllm", "openrouter"):
         await update.message.reply_text(
-            "Invalid provider. Use: /provider vllm|openrouter",
-            parse_mode="Markdown"
+            "Invalid provider. Use: /provider vllm|openrouter", parse_mode="Markdown"
         )
         return
-    
+
     if provider == "openrouter" and not OPENROUTER_API_KEY:
         await update.message.reply_text(
-            "OpenRouter API key not configured. Using vllm.",
-            parse_mode="Markdown"
+            "OpenRouter API key not configured. Using vllm.", parse_mode="Markdown"
         )
         return
-    
+
     _current_provider = provider  # type: ignore[assignment]
     await update.message.reply_text(
-        f"✅ Provider changed to: *{_current_provider}*",
-        parse_mode="Markdown"
+        f"✅ Provider changed to: *{_current_provider}*", parse_mode="Markdown"
     )
+
+
+async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List active tasks and queue per chat."""
+    user = update.effective_user
+    username = user.username if user else None
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    running = len(_active_tasks)
+    queued = dict(_chat_queued_count) or {}
+    if running == 0 and not queued:
+        lines = ["No active tasks."]
+    else:
+        lines = [f"📋 *Active:* {running} running", f"📥 *Queued by chat:* {queued or 'none'}"]
+        if _active_tasks:
+            lines.append("\n*Running tasks:*")
+            for tid, info in list(_active_tasks.items())[:20]:
+                goal_preview = info.task_text[:50] + ("…" if len(info.task_text) > 50 else "")
+                lines.append(f"  {tid}: chat {info.chat_id} — {goal_preview}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with last N lines of activity log."""
+    user = update.effective_user
+    username = user.username if user else None
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    n = 30
+    if context.args and context.args[0].isdigit():
+        n = min(int(context.args[0]), 100)
+    text = get_activity_log_tail(n)
+    if len(text) > MAX_MESSAGE_LENGTH:
+        text = text[-MAX_MESSAGE_LENGTH:]
+    await update.message.reply_text(text)
+
+
+async def context_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show session context for this chat."""
+    user = update.effective_user
+    username = user.username if user else None
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    try:
+        from agent.session_globals import get_db
+
+        db = await get_db()
+        session_id = await db.get_or_create_session(chat_id)
+        stats = await db.get_session_stats(session_id, include_last_messages=5)
+        if "error" in stats:
+            await update.message.reply_text(f"Error: {stats['error']}")
+            return
+        lines = [
+            "📝 *Session context*",
+            f"Messages: {stats['message_count']}",
+            f"Estimated tokens: {stats['estimated_tokens']:,}",
+            f"Total chars: {stats['total_chars']:,}",
+            f"Last activity: {stats['updated_at']}",
+        ]
+        if stats.get("last_messages"):
+            lines.append("\n*Last messages:*")
+            for msg in stats["last_messages"]:
+                role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(
+                    msg["role"], "📄"
+                )
+                lines.append(f"{role_emoji} [{msg['role']}] — {msg['content_preview'][:80]}…")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+    finally:
+        await close_db()
+
+
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear session context for this chat."""
+    user = update.effective_user
+    username = user.username if user else None
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    try:
+        from agent.session_globals import get_db
+
+        db = await get_db()
+        session_id = await db.get_or_create_session(chat_id)
+        await db.clear_session(session_id)
+        await update.message.reply_text(
+            "✅ Context cleared. Session metadata preserved, messages deleted."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+    finally:
+        await close_db()
+
+
+async def errors_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show last N lines of bot error log (for self-repair)."""
+    user = update.effective_user
+    username = user.username if user else None
+    if not _is_user_allowed(username):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    n = 30
+    if context.args and context.args[0].isdigit():
+        n = min(int(context.args[0]), 100)
+    text = get_bot_errors_tail(n)
+    if len(text) > MAX_MESSAGE_LENGTH:
+        text = text[-MAX_MESSAGE_LENGTH:]
+    await update.message.reply_text(text or "No errors logged.")
+
+
+def _log_bot_error(exc: BaseException) -> None:
+    """Append exception and traceback to BOT_ERRORS_LOG so the agent can read it."""
+    try:
+        with open(BOT_ERRORS_LOG, "a", encoding="utf-8") as f:
+            from datetime import datetime
+
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"\n--- {ts} ---\n")
+            f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    except OSError:
+        logger.exception("Failed to write to %s", BOT_ERRORS_LOG)
 
 
 # Global application reference for progress updates
 application: ApplicationBuilder | None = None
 
 
+async def _run_task_in_background(
+    chat_id: int,
+    user_id: int,
+    username: str | None,
+    task_text: str,
+    task_id: int,
+) -> None:
+    """Run task under chat lock and send result via bot. Does not block the message handler."""
+    lock = _get_chat_lock(chat_id)
+    _chat_queued_count[chat_id] = _chat_queued_count.get(chat_id, 0) + 1
+    try:
+        async with lock:
+            if application is None:
+                return
+            bot = application.bot
+            queued = _chat_queued_count.get(chat_id, 0)
+            _chat_queued_count[chat_id] = 0
+            if queued > 1:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏳ Task queued ({queued - 1} ahead)",
+                    parse_mode="Markdown",
+                )
+
+            log_task_start(chat_id, task_text)
+            start_time = time.time()
+            try:
+                from agent.core.runner import run_task_with_session
+
+                result = await run_task_with_session(
+                    task_text,
+                    chat_id=chat_id,
+                    username=username,
+                    user_id=user_id,
+                    provider=_current_provider,
+                )
+                await _send_long_to_chat(bot, chat_id, result)
+                duration = time.time() - start_time
+                log_task_end(chat_id, True, duration)
+            except Exception as e:
+                duration = time.time() - start_time
+                error_msg = f"❌ Error: {str(e)}"
+                await bot.send_message(chat_id=chat_id, text=error_msg, parse_mode="Markdown")
+                log_task_end(chat_id, False, duration, error=str(e))
+                logger.exception("Task failed for chat_id=%s", chat_id)
+    finally:
+        _active_tasks.pop(task_id, None)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages as tasks."""
+    """Handle incoming text messages as tasks. Returns immediately; task runs in background."""
     global _task_counter
-    
+
     user = update.effective_user
     username = user.username if user else None
     chat_id = update.effective_chat.id
-    
+
     if not _is_user_allowed(username):
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
-        logger.warning("Unauthorized message from user: %s (id=%s)", username, user.id if user else "?")
+        logger.warning(
+            "Unauthorized message from user: %s (id=%s)", username, user.id if user else "?"
+        )
         return
-    
+
     task_text = update.message.text
-    
-    # Configure progress tracker for this chat
+
     tracker = get_tracker(chat_id=chat_id, is_cli=False)
     tracker.telegram_callback = _send_progress_update
-    
-    # Create task info
+
     _task_counter += 1
-    task_info = TaskInfo(
+    my_task_id = _task_counter
+    _active_tasks[my_task_id] = TaskInfo(
         task_text=task_text,
         chat_id=chat_id,
         username=username,
         user_id=user.id,
         provider=_current_provider,
     )
-    _active_tasks[_task_counter] = task_info
-    
-    # Acquire chat lock
-    lock = _get_chat_lock(chat_id)
-    
-    # Check queue
-    if _chat_queued_count.get(chat_id, 0) > 0:
-        await update.message.reply_text(
-            f"⏳ Task queued ({_chat_queued_count[chat_id]} ahead)",
-            parse_mode="Markdown"
+
+    asyncio.create_task(
+        _run_task_in_background(
+            chat_id=chat_id,
+            user_id=user.id,
+            username=username,
+            task_text=task_text,
+            task_id=my_task_id,
         )
-    
-    async with lock:
-        _chat_queued_count[chat_id] = 0
-        
-        # Log task start
-        log_task_start(task_text, chat_id, username)
-        
-        try:
-            # Run task with session
-            from agent.core.runner import run_task_with_session
-            
-            result = await run_task_with_session(
-                task_text,
-                chat_id=chat_id,
-                username=username,
-                user_id=user.id,
-                provider=_current_provider,
-            )
-            
-            # Send result
-            await _send_long_message(update.message, result)
-            
-            # Log task end
-            log_task_end(task_text, chat_id, username, success=True)
-            
-        except Exception as e:
-            error_msg = f"❌ Error: {str(e)}"
-            await update.message.reply_text(error_msg, parse_mode="Markdown")
-            
-            # Log task end
-            log_task_end(task_text, chat_id, username, success=False, error=str(e))
-            
-            logger.exception("Task failed for chat_id=%s", chat_id)
-    
-    # Clean up
-    del _active_tasks[_task_counter]
+    )
 
 
 def run_bot() -> None:
     """Run Telegram bot."""
     global application
-    
+
     if not TG_BOT_KEY:
         logger.error("TG_BOT_KEY not set. Cannot start Telegram bot.")
         return
-    
+
     setup_logging()
-    
-    # Create application
+
+    # Create application; allow concurrent updates so /status, /help, etc. work while a task runs
     application = (
         ApplicationBuilder()
         .token(TG_BOT_KEY)
-        .enable_coroutine_support()
+        .concurrent_updates(10)
         .build()
     )
-    
+
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("provider", provider_cmd))
-    
+    application.add_handler(CommandHandler("tasks", tasks_cmd))
+    application.add_handler(CommandHandler("logs", logs_cmd))
+    application.add_handler(CommandHandler("context", context_cmd))
+    application.add_handler(CommandHandler("clear", clear_cmd))
+    application.add_handler(CommandHandler("errors", errors_cmd))
+
     # Add message handler (for tasks)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+
+    async def error_handler(_update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        exc = context.error
+        if exc is not None:
+            _log_bot_error(exc)
+
+    application.add_error_handler(error_handler)
+
     logger.info("Telegram bot started")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
