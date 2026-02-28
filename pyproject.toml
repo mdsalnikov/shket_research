@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shket-research-agent"
-version = "0.0.2"
+version = "0.4.3"
 description = "Autonomous LLM-powered agent for Ubuntu server — CLI and Telegram bot with SQLite session persistence"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Shket"}]
-keywords = ["agent", "llm", "telegram", "research", "sqlite", "session"]
+keywords = ["agent", "llm", "telegram", "research", "sqlite", "session", "browser"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",
     "aiosqlite>=0.20",
+    "playwright>=1.40.0",
 ]
 
 [project.optional-dependencies]
