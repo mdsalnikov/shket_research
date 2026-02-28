@@ -39,6 +39,9 @@ Tools:
 - run_shell: execute shell commands on the host OS (non-root user)
 - read_file / write_file / list_dir: filesystem operations
 - web_search: search the web and retrieve information
+- deep_research: conduct multi-step autonomous research with synthesis
+- quick_research: perform a quick single-step research query
+- compare_sources: compare information across multiple sources
 - create_todo / get_todo / mark_todo_done: plan multi-step tasks and track progress
 - backup_codebase: create full backup before self-modification
 - list_backups: list .backup_* dirs (for rollback)
@@ -50,18 +53,49 @@ Tools:
 - request_restart: request process restart to load new code (TG bot only)
 - recall: recall information from memory
 - remember: save important information to memory
+- read_agents_md: read AGENTS.md for project context and guidelines
+- get_agents_rules: get rules from AGENTS.md
+- get_agents_context: get context for a specific topic from AGENTS.md
+- list_skills: list available skills
+- get_skill: get a specific skill by name
+- find_relevant_skills: find skills relevant to a task
+- create_skill: create a new skill
+- list_subagents: list available subagents
+- get_subagent: get a specific subagent
+- delegate_task: delegate a task to a subagent
+- route_task: automatically route a task to appropriate subagent
+- create_subagent: create a new subagent
 
 Rules:
 1. Always use tools when the task requires interacting with the OS, files, or the web.
 2. For shell commands, prefer simple one-liners. Avoid interactive commands.
 3. When writing code/scripts, write them to a file using write_file, then execute with run_shell.
-4. For research tasks, use web_search to find information, then synthesize a clear answer.
+4. For research tasks:
+   - Use web_search for simple queries
+   - Use deep_research for complex multi-step research
+   - Use quick_research for fast lookups
+   - Use compare_sources when verification is needed
 5. Be concise and precise in your final answers.
 6. If a task asks you to write a script, always save it to a file AND execute it to verify it works.
 
 Multi-step tasks (TODO):
 7. For complex tasks, use create_todo with steps, then execute each and mark_todo_done.
 8. Check get_todo to see progress. Do not skip steps.
+
+AGENTS.md Support:
+- Always read AGENTS.md at the start of complex tasks
+- Follow rules and guidelines from AGENTS.md
+- Use get_agents_context for topic-specific guidance
+
+Skills System:
+- Use find_relevant_skills to discover domain expertise
+- Skills provide patterns and best practices for specific tasks
+- Create new skills for recurring task patterns
+
+Subagents:
+- Use route_task to automatically delegate to specialized subagents
+- Use delegate_task for explicit delegation
+- Subagents have isolated context and specialized capabilities
 
 =============================================================================
 SELF-MODIFICATION PROTOCOL (when asked to change YOURSELF)
@@ -94,7 +128,7 @@ PHASE 3B — LARGER CHANGE (multiple files, new feature): use PR, do not merge y
 - If all tests and run_agent_subprocess passed: git_add(["."]), git_commit("message with version"),
   git_push() (you are on your branch), then run_gh("pr create --title '...' --body '...'").
 - Verify: run_gh("pr view") and run_tests("tests/test_cli.py") again.
-- Do NOT run run_gh("pr merge"). Ask the user to review and merge the PR.
+- Do NOT run_gh("pr merge"). Ask the user to review and merge the PR.
 - After the user has merged: git_checkout("main"), git_pull("main"). If TG bot: request_restart().
 
 ROLLBACK (if anything fails after you edited files):
@@ -190,57 +224,46 @@ def build_model(
         provider = "vllm"
 
     if provider == "openrouter":
-        logger.info(f"Using OpenRouter provider with model: {model_name or OPENROUTER_MODEL_NAME}")
+        logger.info("Building OpenRouter model: %s", model_name or OPENROUTER_MODEL_NAME)
         return build_openrouter_model(model_name, api_key)
     else:
-        logger.info(f"Using vLLM provider at {VLLM_BASE_URL} with model: {model_name or VLLM_MODEL_NAME}")
-        return build_vllm_model(model_name, api_key=api_key)
+        logger.info("Building vLLM model: %s", model_name or VLLM_MODEL_NAME)
+        return build_vllm_model(model_name, base_url=None, api_key=None)
 
 
-def get_all_tools() -> list:
-    """Get all available tools for the agent.
+def build_agent(
+    model: OpenAIChatModel | OpenRouterModel | None = None,
+    provider: str | None = None,
+    system_prompt: str | None = None,
+) -> Agent[AgentDeps]:
+    """Build agent with model and tools.
     
+    Args:
+        model: Pre-configured model (optional)
+        provider: 'vllm' or 'openrouter' (used if model not provided)
+        system_prompt: Override system prompt (optional)
+        
     Returns:
-        List of tool functions
+        Configured Pydantic AI Agent
         
     """
-    from agent.tools.filesystem import list_dir, read_file, write_file
-    from agent.tools.gh import run_gh
-    from agent.tools.git import (
-        git_add,
-        git_checkout,
-        git_commit,
-        git_pull,
-        git_push,
-        git_status,
-    )
-    from agent.tools.restart import request_restart
-    from agent.tools.self_test import (
-        backup_codebase,
-        list_backups,
-        restore_from_backup,
-        run_agent_subprocess,
-        run_tests,
-    )
-    from agent.tools.shell import run_shell
-    from agent.tools.todo import create_todo, get_todo, mark_todo_done
-    from agent.tools.web import web_search
-    from agent.tools.memory import recall, remember
-
-    return [
+    if model is None:
+        model = build_model(provider=provider)
+    
+    from agent.tools import (
         run_shell,
         read_file,
         write_file,
         list_dir,
         web_search,
+        deep_research,
+        quick_research,
+        compare_sources,
         create_todo,
         get_todo,
         mark_todo_done,
-        backup_codebase,
-        list_backups,
-        restore_from_backup,
-        run_tests,
-        run_agent_subprocess,
+        recall,
+        remember,
         git_status,
         git_add,
         git_commit,
@@ -249,92 +272,88 @@ def get_all_tools() -> list:
         git_checkout,
         run_gh,
         request_restart,
-        recall,
-        remember,
-    ]
-
-
-def build_agent(
-    model_name: str | None = None,
-    api_key: str | None = None,
-    provider: str | None = None,
-) -> Agent:
-    """Build agent with all tools (legacy mode without dependencies).
+        read_agents_md,
+        get_agents_rules,
+        get_agents_context,
+        list_skills,
+        get_skill,
+        find_relevant_skills,
+        create_skill,
+        list_subagents,
+        get_subagent,
+        delegate_task,
+        route_task,
+        create_subagent,
+    )
+    from agent.core.agent import backup_codebase, list_backups, restore_from_backup
+    from agent.tools.self_test import run_tests, run_agent_subprocess
     
-    This creates a simple agent without session support.
-    Use build_session_agent for full SQLite session persistence.
+    agent = Agent[AgentDeps](
+        model=model,
+        system_prompt=system_prompt or SYSTEM_PROMPT,
+        deps_type=AgentDeps,
+    )
     
-    Args:
-        model_name: Model identifier
-        api_key: API key
-        provider: 'vllm' or 'openrouter'
-        
-    Returns:
-        Agent instance (without session support)
-        
-    """
-    model = build_model(model_name, api_key, provider)
-    tools = get_all_tools()
-
-    return Agent(model, system_prompt=SYSTEM_PROMPT, tools=tools)
+    # Register tools
+    agent.tool()(run_shell)
+    agent.tool()(read_file)
+    agent.tool()(write_file)
+    agent.tool()(list_dir)
+    agent.tool()(web_search)
+    agent.tool()(deep_research)
+    agent.tool()(quick_research)
+    agent.tool()(compare_sources)
+    agent.tool()(create_todo)
+    agent.tool()(get_todo)
+    agent.tool()(mark_todo_done)
+    agent.tool()(recall)
+    agent.tool()(remember)
+    agent.tool()(git_status)
+    agent.tool()(git_add)
+    agent.tool()(git_commit)
+    agent.tool()(git_push)
+    agent.tool()(git_pull)
+    agent.tool()(git_checkout)
+    agent.tool()(run_gh)
+    agent.tool()(request_restart)
+    agent.tool()(read_agents_md)
+    agent.tool()(get_agents_rules)
+    agent.tool()(get_agents_context)
+    agent.tool()(list_skills)
+    agent.tool()(get_skill)
+    agent.tool()(find_relevant_skills)
+    agent.tool()(create_skill)
+    agent.tool()(list_subagents)
+    agent.tool()(get_subagent)
+    agent.tool()(delegate_task)
+    agent.tool()(route_task)
+    agent.tool()(create_subagent)
+    agent.tool()(backup_codebase)
+    agent.tool()(list_backups)
+    agent.tool()(restore_from_backup)
+    agent.tool()(run_tests)
+    agent.tool()(run_agent_subprocess)
+    
+    return agent
 
 
 def build_session_agent(
-    model_name: str | None = None,
-    api_key: str | None = None,
+    model: OpenAIChatModel | OpenRouterModel | None = None,
     provider: str | None = None,
-) -> Agent:
-    """Build agent with session support (uses AgentDeps).
-
-    This is the preferred way to build agents with SQLite persistence.
-    The agent will have access to session history and memory through
-    the RunContext passed to tools.
+    system_prompt: str | None = None,
+) -> Agent[AgentDeps]:
+    """Build agent with session support.
     
-    Architecture (OpenClaw-inspired):
-    - Sessions stored in SQLite with per-chat isolation
-    - Memory with L0/L1/L2 hierarchy
-    - Dependency injection via AgentDeps
-    - Dynamic system prompt with memory context
+    This is the same as build_agent but explicitly for session-based
+    interactions with SQLite persistence.
     
     Args:
-        model_name: Model identifier
-        api_key: API key
-        provider: 'vllm' or 'openrouter'
+        model: Pre-configured model (optional)
+        provider: 'vllm' or 'openrouter' (used if model not provided)
+        system_prompt: Override system prompt (optional)
         
     Returns:
-        Agent instance with session support
+        Configured Pydantic AI Agent with session support
         
     """
-    model = build_model(model_name, api_key, provider)
-    tools = get_all_tools()
-
-    agent = Agent(
-        model,
-        deps_type=AgentDeps,
-        tools=tools,
-    )
-
-    # Add dynamic system prompt with memory context
-    @agent.system_prompt
-    async def get_system_prompt(ctx) -> str:
-        """Get system prompt with optional memory context.
-        
-        Injects L0 memory summary into the system prompt for context
-        continuity across sessions.
-        """
-        deps = ctx.deps
-        
-        # Build memory context if available
-        memory_context = ""
-        if deps.memory_l0:
-            memory_context = "\n\n## Memory Context (L0)\n\n"
-            for category, summaries in deps.memory_l0.items():
-                if summaries:
-                    memory_context += f"### {category}\n"
-                    for summary in summaries:
-                        memory_context += f"- {summary}\n"
-                    memory_context += "\n"
-        
-        return SYSTEM_PROMPT + memory_context
-
-    return agent
+    return build_agent(model=model, provider=provider, system_prompt=system_prompt)
