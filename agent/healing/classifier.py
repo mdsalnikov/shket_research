@@ -27,6 +27,8 @@ class ErrorType(Enum):
     USAGE_LIMIT = auto()        # Account/quota limit - cannot retry
     AUTH_ERROR = auto()         # Authentication error - cannot retry
     FATAL = auto()              # Cannot recover, need fallback
+    NETWORK_ERROR = auto()      # Network issues - retry with backoff
+    TIMEOUT = auto()            # Request timeout - retry with backoff
     UNKNOWN = auto()            # Unknown error, treat as recoverable
 
 
@@ -80,6 +82,10 @@ class ErrorClassifier:
         r"message.*too.*long",
         r"prompt.*too.*long",
         r"input.*length.*exceed",
+        r"exceeds.*maximum.*tokens",
+        r"output.*tokens.*exceed",
+        r"completion.*too.*long",
+        r"response.*length.*exceed",
     ]
     
     RATE_LIMIT_PATTERNS = [
@@ -89,6 +95,11 @@ class ErrorClassifier:
         r"slow.*down",
         r"retry.*after",
         r"429",
+        r"exceeds.*rate.*limit",
+        r"rate.*exceeded",
+        r"requests.*per.*minute",
+        r"requests.*per.*second",
+        r"api.*limit",
     ]
     
     USAGE_LIMIT_PATTERNS = [
@@ -100,6 +111,9 @@ class ErrorClassifier:
         r"account.*limit",
         r"monthly.*limit",
         r"daily.*limit",
+        r"subscription.*limit",
+        r"plan.*limit",
+        r"free.*tier.*limit",
     ]
     
     AUTH_ERROR_PATTERNS = [
@@ -111,6 +125,36 @@ class ErrorClassifier:
         r"permission.*denied",
         r"access.*denied",
         r"invalid.*credential",
+        r"token.*expired",
+        r"token.*invalid",
+        r"bearer.*invalid",
+        r"api.*key.*invalid",
+        r"api.*key.*not.*found",
+    ]
+    
+    NETWORK_ERROR_PATTERNS = [
+        r"connection.*refused",
+        r"connection.*reset",
+        r"connection.*timeout",
+        r"network.*unreachable",
+        r"no.*such.*host",
+        r"failed.*to.*resolve",
+        r"connection.*error",
+        r"socket.*error",
+        r"ssl.*error",
+        r"certificate.*error",
+        r"tls.*error",
+    ]
+    
+    TIMEOUT_PATTERNS = [
+        r"timeout.*exceeded",
+        r"request.*timeout",
+        r"read.*timeout",
+        r"write.*timeout",
+        r"connect.*timeout",
+        r"operation.*timed.*out",
+        r"timed.*out.*while",
+        r"deadline.*exceeded",
     ]
     
     FATAL_PATTERNS = [
@@ -122,6 +166,9 @@ class ErrorClassifier:
         r"502",
         r"503",
         r"504",
+        r"gateway.*timeout",
+        r"bad.*gateway",
+        r"service.*discovery.*failed",
     ]
     
     def __init__(self):
@@ -138,6 +185,12 @@ class ErrorClassifier:
             ],
             ErrorType.AUTH_ERROR: [
                 re.compile(p, re.IGNORECASE) for p in self.AUTH_ERROR_PATTERNS
+            ],
+            ErrorType.NETWORK_ERROR: [
+                re.compile(p, re.IGNORECASE) for p in self.NETWORK_ERROR_PATTERNS
+            ],
+            ErrorType.TIMEOUT: [
+                re.compile(p, re.IGNORECASE) for p in self.TIMEOUT_PATTERNS
             ],
             ErrorType.FATAL: [
                 re.compile(p, re.IGNORECASE) for p in self.FATAL_PATTERNS
@@ -190,6 +243,28 @@ class ErrorClassifier:
                 metadata={"reason": "Authentication failed"},
             )
         
+        # NETWORK_ERROR - can retry with exponential backoff
+        if self._matches_patterns(message, ErrorType.NETWORK_ERROR):
+            return ClassifiedError(
+                error_type=ErrorType.NETWORK_ERROR,
+                original_error=error,
+                message=message,
+                is_retryable=True,
+                suggested_action="retry_with_backoff",
+                metadata={"reason": "Network error", "use_exponential_backoff": True},
+            )
+        
+        # TIMEOUT - can retry with exponential backoff
+        if self._matches_patterns(message, ErrorType.TIMEOUT):
+            return ClassifiedError(
+                error_type=ErrorType.TIMEOUT,
+                original_error=error,
+                message=message,
+                is_retryable=True,
+                suggested_action="retry_with_backoff",
+                metadata={"reason": "Request timeout", "use_exponential_backoff": True},
+            )
+        
         # RATE_LIMIT - can retry after wait
         if self._matches_patterns(message, ErrorType.RATE_LIMIT):
             wait_seconds = self._extract_wait_time(message)
@@ -240,38 +315,50 @@ class ErrorClassifier:
     def _extract_wait_time(self, message: str) -> int:
         """Extract wait time from rate limit error message.
         
+        Looks for patterns like:
+        - "retry after 30 seconds"
+        - "try again in 60s"
+        - "rate limit resets in 5 minutes"
+        
         Args:
-            message: Error message potentially containing wait time
+            message: Error message to parse
             
         Returns:
-            Wait time in seconds (default: 60)
+            Wait time in seconds (default 30 if not found)
             
         """
-        # Try to find "retry after X" or "wait X seconds"
+        # Look for numeric patterns with time units
         patterns = [
-            r"retry.*after.*?(\d+)",
-            r"wait.*?(\d+).*?(?:second|sec)",
-            r"retry.?in.*?(\d+)",
+            r"(\d+)\s*(?:seconds?|s)\b",
+            r"(\d+)\s*(?:minutes?|m)\b",
+            r"(\d+)\s*(?:hours?|h)\b",
         ]
         
         for pattern in patterns:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
-                return int(match.group(1))
+                value = int(match.group(1))
+                # Convert to seconds based on unit
+                unit = match.group(0).lower()
+                if 'minute' in unit:
+                    return value * 60
+                elif 'hour' in unit:
+                    return value * 3600
+                return value
         
         # Default wait time
-        return 60
+        return 30
     
     def should_retry(self, error: Exception, attempt: int, max_attempts: int) -> bool:
-        """Determine if we should retry after an error.
+        """Determine if we should retry based on error classification.
         
         Args:
             error: The exception that occurred
             attempt: Current attempt number (0-indexed)
-            max_attempts: Maximum attempts allowed
+            max_attempts: Maximum allowed attempts
             
         Returns:
-            True if we should retry, False otherwise
+            True if retry is appropriate
             
         """
         if attempt >= max_attempts - 1:
@@ -279,3 +366,33 @@ class ErrorClassifier:
         
         classified = self.classify(error)
         return classified.is_retryable
+    
+    def get_backoff_time(self, error: Exception, attempt: int) -> int:
+        """Calculate backoff time for retry.
+        
+        Uses exponential backoff for network errors and timeouts.
+        Uses fixed wait time for rate limits.
+        
+        Args:
+            error: The exception that occurred
+            attempt: Current attempt number (0-indexed)
+            
+        Returns:
+            Wait time in seconds before retry
+            
+        """
+        classified = self.classify(error)
+        
+        # Rate limit - use extracted wait time
+        if classified.error_type == ErrorType.RATE_LIMIT:
+            return classified.metadata.get("wait_seconds", 30)
+        
+        # Network errors and timeouts - exponential backoff
+        if classified.error_type in (ErrorType.NETWORK_ERROR, ErrorType.TIMEOUT):
+            # Exponential backoff: 2^attempt * base_delay
+            base_delay = 2
+            max_delay = 60
+            return min(base_delay * (2 ** attempt), max_delay)
+        
+        # Default - small delay
+        return 1
