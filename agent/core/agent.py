@@ -39,6 +39,14 @@ Tools:
 - run_shell: execute shell commands on the host OS (non-root user)
 - read_file / write_file / list_dir: filesystem operations
 - web_search: search the web and retrieve information
+- browser_navigate: navigate to a URL and extract page content
+- browser_screenshot: take a screenshot of the current page
+- browser_get_text: extract text from elements using CSS selector
+- browser_click: click on an element using CSS selector
+- browser_fill: fill a form field with text
+- browser_get_html: get full page HTML
+- browser_get_url: get current page URL
+- browser_refresh: refresh the current page
 - deep_research: conduct multi-step autonomous research with synthesis
 - quick_research: perform a quick single-step research query
 - compare_sources: compare information across multiple sources
@@ -70,8 +78,12 @@ Rules:
 1. Always use tools when the task requires interacting with the OS, files, or the web.
 2. For shell commands, prefer simple one-liners. Avoid interactive commands.
 3. When writing code/scripts, write them to a file using write_file, then execute with run_shell.
-4. For research tasks:
+4. For web tasks:
    - Use web_search for simple queries
+   - Use browser_navigate to visit specific URLs
+   - Use browser_get_text to extract content from pages
+   - Use browser_screenshot to capture visual state
+   - Use browser_click and browser_fill for interaction
    - Use deep_research for complex multi-step research
    - Use quick_research for fast lookups
    - Use compare_sources when verification is needed
@@ -189,171 +201,78 @@ def build_openrouter_model(
     """Build OpenRouter model instance.
     
     Args:
-        model_name: Model identifier (e.g., 'anthropic/claude-3.5-sonnet')
+        model_name: Model identifier (e.g., 'openai/gpt-oss-120b')
         api_key: OpenRouter API key
         
     Returns:
         Configured OpenRouterModel instance
         
     """
+    provider = OpenRouterProvider(
+        api_key=api_key or OPENROUTER_API_KEY,
+    )
     return OpenRouterModel(
         model_name=model_name or OPENROUTER_MODEL_NAME,
-        provider=OpenRouterProvider(api_key=api_key or OPENROUTER_API_KEY),
+        provider=provider,
     )
-
-
-def build_model(
-    model_name: str | None = None,
-    api_key: str | None = None,
-    provider: str | None = None,
-) -> OpenAIChatModel | OpenRouterModel:
-    """Build model instance based on provider.
-    
-    Args:
-        model_name: Model identifier
-        api_key: API key (provider-specific)
-        provider: 'vllm' or 'openrouter' (default: from config)
-        
-    Returns:
-        Configured model instance
-        
-    """
-    provider = provider or PROVIDER_DEFAULT
-    if provider == "openrouter" and not (api_key or OPENROUTER_API_KEY):
-        logger.warning("OpenRouter requested but OPENROUTER_API_KEY is not set; using vLLM")
-        provider = "vllm"
-
-    if provider == "openrouter":
-        logger.info("Building OpenRouter model: %s", model_name or OPENROUTER_MODEL_NAME)
-        return build_openrouter_model(model_name, api_key)
-    else:
-        logger.info("Building vLLM model: %s", model_name or VLLM_MODEL_NAME)
-        return build_vllm_model(model_name, base_url=None, api_key=None)
-
-
-def build_agent(
-    model: OpenAIChatModel | OpenRouterModel | None = None,
-    provider: str | None = None,
-    system_prompt: str | None = None,
-) -> Agent[AgentDeps]:
-    """Build agent with model and tools.
-    
-    Args:
-        model: Pre-configured model (optional)
-        provider: 'vllm' or 'openrouter' (used if model not provided)
-        system_prompt: Override system prompt (optional)
-        
-    Returns:
-        Configured Pydantic AI Agent
-        
-    """
-    if model is None:
-        model = build_model(provider=provider)
-    
-    from agent.tools import (
-        run_shell,
-        read_file,
-        write_file,
-        list_dir,
-        web_search,
-        deep_research,
-        quick_research,
-        compare_sources,
-        create_todo,
-        get_todo,
-        mark_todo_done,
-        recall,
-        remember,
-        git_status,
-        git_add,
-        git_commit,
-        git_push,
-        git_pull,
-        git_checkout,
-        run_gh,
-        request_restart,
-        read_agents_md,
-        get_agents_rules,
-        get_agents_context,
-        list_skills,
-        get_skill,
-        find_relevant_skills,
-        create_skill,
-        list_subagents,
-        get_subagent,
-        delegate_task,
-        route_task,
-        create_subagent,
-    )
-    from agent.core.agent import backup_codebase, list_backups, restore_from_backup
-    from agent.tools.self_test import run_tests, run_agent_subprocess
-    
-    agent = Agent[AgentDeps](
-        model=model,
-        system_prompt=system_prompt or SYSTEM_PROMPT,
-        deps_type=AgentDeps,
-    )
-    
-    # Register tools
-    agent.tool()(run_shell)
-    agent.tool()(read_file)
-    agent.tool()(write_file)
-    agent.tool()(list_dir)
-    agent.tool()(web_search)
-    agent.tool()(deep_research)
-    agent.tool()(quick_research)
-    agent.tool()(compare_sources)
-    agent.tool()(create_todo)
-    agent.tool()(get_todo)
-    agent.tool()(mark_todo_done)
-    agent.tool()(recall)
-    agent.tool()(remember)
-    agent.tool()(git_status)
-    agent.tool()(git_add)
-    agent.tool()(git_commit)
-    agent.tool()(git_push)
-    agent.tool()(git_pull)
-    agent.tool()(git_checkout)
-    agent.tool()(run_gh)
-    agent.tool()(request_restart)
-    agent.tool()(read_agents_md)
-    agent.tool()(get_agents_rules)
-    agent.tool()(get_agents_context)
-    agent.tool()(list_skills)
-    agent.tool()(get_skill)
-    agent.tool()(find_relevant_skills)
-    agent.tool()(create_skill)
-    agent.tool()(list_subagents)
-    agent.tool()(get_subagent)
-    agent.tool()(delegate_task)
-    agent.tool()(route_task)
-    agent.tool()(create_subagent)
-    agent.tool()(backup_codebase)
-    agent.tool()(list_backups)
-    agent.tool()(restore_from_backup)
-    agent.tool()(run_tests)
-    agent.tool()(run_agent_subprocess)
-    
-    return agent
 
 
 def build_session_agent(
-    model: OpenAIChatModel | OpenRouterModel | None = None,
     provider: str | None = None,
-    system_prompt: str | None = None,
+    model_name: str | None = None,
 ) -> Agent[AgentDeps]:
     """Build agent with session support.
     
-    This is the same as build_agent but explicitly for session-based
-    interactions with SQLite persistence.
-    
     Args:
-        model: Pre-configured model (optional)
-        provider: 'vllm' or 'openrouter' (used if model not provided)
-        system_prompt: Override system prompt (optional)
+        provider: 'vllm' or 'openrouter' (default: from config)
+        model_name: Model name override
         
     Returns:
-        Configured Pydantic AI Agent with session support
+        Configured Pydantic AI Agent instance
         
     """
-    return build_agent(model=model, provider=provider, system_prompt=system_prompt)
+    prov = provider or PROVIDER_DEFAULT
+    
+    if prov == "openrouter":
+        model = build_openrouter_model(model_name=model_name)
+    else:
+        model = build_vllm_model(model_name=model_name)
+    
+    agent = Agent(
+        model=model,
+        system_prompt=SYSTEM_PROMPT,
+        deps_type=AgentDeps,
+    )
+    
+    logger.info("Agent built with provider=%s, model=%s", prov, model_name or "default")
+    return agent
+
+
+def build_simple_agent(
+    provider: str | None = None,
+    model_name: str | None = None,
+) -> Agent[None]:
+    """Build simple agent without session support.
+    
+    Args:
+        provider: 'vllm' or 'openrouter' (default: from config)
+        model_name: Model name override
+        
+    Returns:
+        Configured Pydantic AI Agent instance
+        
+    """
+    prov = provider or PROVIDER_DEFAULT
+    
+    if prov == "openrouter":
+        model = build_openrouter_model(model_name=model_name)
+    else:
+        model = build_vllm_model(model_name=model_name)
+    
+    agent = Agent(
+        model=model,
+        system_prompt=SYSTEM_PROMPT,
+    )
+    
+    logger.info("Simple agent built with provider=%s, model=%s", prov, model_name or "default")
+    return agent

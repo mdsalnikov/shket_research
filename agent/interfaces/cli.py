@@ -1,4 +1,4 @@
-"""CLI interface with session support."""
+"""CLI interface with session support and progress tracking."""
 
 import argparse
 import asyncio
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agent.config import LOG_FILE, PROVIDER_DEFAULT, setup_logging
 from agent.session_globals import close_db, get_db
+from agent.progress import get_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def _builtin_status() -> str:
         "Usage: python -m agent run 'your task' [--provider vllm|openrouter]"
     )
 
+
 async def _run_task(task: str, provider: str | None = None) -> None:
     """Run a task with session support (CLI mode uses chat_id=0).
     
@@ -51,10 +53,20 @@ async def _run_task(task: str, provider: str | None = None) -> None:
         return
 
     from agent.core.runner import run_with_retry
-
+    
+    # Configure progress tracker for CLI
+    tracker = get_tracker(chat_id=0, is_cli=True)
+    
+    # Set up CLI callback for progress updates
+    def cli_progress_callback(message: str) -> None:
+        """Callback for progress updates in CLI."""
+        print(message, flush=True)
+    
+    tracker.cli_callback = cli_progress_callback
+    
     try:
         output = await run_with_retry(task, chat_id=0, provider=provider)
-        print(output)
+        print("\n" + output)
     finally:
         await close_db()
 
@@ -221,88 +233,57 @@ def main():
     )
     sub = parser.add_subparsers(dest="command")
 
-    run_p = sub.add_parser("run", help="Выполнить задачу")
-    run_p.add_argument("task", help="Описание задачи на естественном языке")
-    run_p.add_argument(
-        "--provider", "-p",
-        choices=["vllm", "openrouter"],
-        default=None,
-        help=f"LLM provider (default: {PROVIDER_DEFAULT}). Use 'vllm' for local, 'openrouter' for cloud.",
-    )
+    run_parser = sub.add_parser("run", help="Run a task")
+    run_parser.add_argument("task", nargs="?", default="", help="Task description")
+    run_parser.add_argument("--provider", choices=["vllm", "openrouter"], help="LLM provider")
 
-    sub.add_parser("bot", help="Запустить Telegram‑бот (long‑polling)")
-    sub.add_parser("status", help="Показать статус агента")
-    sub.add_parser("version", help="Показать версию агента")
-    sub.add_parser("memory", help="Показать сводку памяти")
+    sub.add_parser("status", help="Show agent status")
+    sub.add_parser("memory", help="Show memory summary")
+    sub.add_parser("clear", help="Clear session context")
+    sub.add_parser("context", help="Show session context")
+    sub.add_parser("resume", help="Resume incomplete task")
+    
+    long_parser = sub.add_parser("long", help="Long-running commands")
+    long_sub = long_parser.add_subparsers(dest="long_cmd")
+    long_list_parser = long_sub.add_parser("list", help="List resumable tasks")
+    long_list_parser.add_argument("--chat-id", type=int, help="Filter by chat_id")
+    long_list_parser.add_argument("--limit", type=int, default=20, help="Max tasks to show")
+    long_show_parser = long_sub.add_parser("show", help="Show task details")
+    long_show_parser.add_argument("task_id", type=int, help="Task ID")
 
-    long_p = sub.add_parser("long", help="Long (resumable) задачи: list, resume, show")
-    long_sub = long_p.add_subparsers(dest="long_subcommand")
-    long_sub.add_parser("list", help="Список resumable задач (все или по chat_id)")
-    long_sub.add_parser("resume", help="Возобновить одну незавершённую задачу")
-    show_p = long_sub.add_parser("show", help="Показать задачу по id")
-    show_p.add_argument("id", type=int, help="ID задачи")
-    long_p.add_argument("--chat-id", type=int, default=None, help="Только для этого чата (для list)")
-    long_p.add_argument("--limit", type=int, default=20, help="Макс. записей для list (по умолчанию 20)")
-
-    session_p = sub.add_parser("session", help="Сессия: context, clear")
-    session_sub = session_p.add_subparsers(dest="session_subcommand")
-    session_sub.add_parser("context", help="Информация о контексте сессии")
-    session_sub.add_parser("clear", help="Очистить контекст сессии")
-
-    sub.add_parser("context", help="(то же что session context)")
-    sub.add_parser("clear-context", help="(то же что session clear)")
-    sub.add_parser("resume", help="(то же что long resume)")
-
-    logs_p = sub.add_parser("logs", help="Показать последние записи лога")
-    logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
+    logs_parser = sub.add_parser("logs", help="Show log tail")
+    logs_parser.add_argument("n", type=int, nargs="?", default=30, help="Number of lines")
 
     args = parser.parse_args()
 
-    if args.command == "logs":
-        _show_logs(args.n)
+    if args.command is None:
+        parser.print_help()
         return
 
-    setup_logging()
-
     if args.command == "run":
-        asyncio.run(_run_task(args.task, args.provider))
+        if not args.task:
+            print("Error: Task description required")
+            print("Usage: python -m agent run 'your task'")
+            return
+        asyncio.run(_run_task(args.task, provider=args.provider))
     elif args.command == "status":
         print(_builtin_status())
-    elif args.command == "version":
-        print(f"Shket Research Agent v{VERSION}")
     elif args.command == "memory":
         asyncio.run(_show_memory_summary())
-    elif args.command == "long":
-        subc = getattr(args, "long_subcommand", None)
-        if subc == "list":
-            asyncio.run(_long_list(chat_id=getattr(args, "chat_id", None), limit=getattr(args, "limit", 20)))
-        elif subc == "resume":
-            asyncio.run(_resume_task())
-        elif subc == "show":
-            asyncio.run(_long_show(getattr(args, "id", 0)))
-        else:
-            long_p.print_help()
-    elif args.command == "session":
-        subc = getattr(args, "session_subcommand", None)
-        if subc == "context":
-            asyncio.run(_show_context())
-        elif subc == "clear":
-            asyncio.run(_clear_context())
-        else:
-            session_p.print_help()
+    elif args.command == "clear":
+        asyncio.run(_clear_context())
     elif args.command == "context":
         asyncio.run(_show_context())
-    elif args.command == "clear-context":
-        asyncio.run(_clear_context())
     elif args.command == "resume":
         asyncio.run(_resume_task())
-    elif args.command == "bot":
-        from agent.interfaces.telegram import run_bot
-        run_bot()
+    elif args.command == "long":
+        if args.long_cmd == "list":
+            asyncio.run(_long_list(chat_id=args.chat_id, limit=args.limit))
+        elif args.long_cmd == "show":
+            asyncio.run(_long_show(args.task_id))
+        else:
+            long_parser.print_help()
+    elif args.command == "logs":
+        _show_logs(args.n)
     else:
         parser.print_help()
-        print(f"\nVersion: {VERSION}")
-        print(f"Default provider: {PROVIDER_DEFAULT}")
-
-if __name__ == "__main__":
-    main()

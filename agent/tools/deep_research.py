@@ -13,6 +13,7 @@ Follows patterns from OpenAI Deep Research and other advanced agent systems.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -103,17 +104,30 @@ class DeepResearchAgent:
         
         plan = ResearchPlan(topic=topic, goals=goals)
         
-        # Create initial research steps
-        plan.steps = [
-            ResearchStep(1, f"Initial broad search on {topic}"),
-            ResearchStep(2, "Identify key themes and subtopics"),
-            ResearchStep(3, "Deep dive into primary sources"),
-            ResearchStep(4, "Cross-reference and verify information"),
-            ResearchStep(5, "Synthesize findings and identify gaps"),
-        ]
+        # Create initial research steps based on topic type
+        plan.steps = self._create_intelligent_steps(topic, goals)
         
         plan.estimated_steps = min(len(plan.steps), self.max_steps)
         return plan
+    
+    def _create_intelligent_steps(self, topic: str, goals: list[str]) -> list[ResearchStep]:
+        """Create research steps tailored to the topic and goals."""
+        steps = []
+        
+        # Initial broad search
+        steps.append(ResearchStep(1, f"Initial broad search on {topic}"))
+        
+        # Add goal-specific steps
+        for i, goal in enumerate(goals[:3], 2):  # Limit to 3 goal-specific steps
+            steps.append(ResearchStep(i, f"Investigate: {goal}"))
+        
+        # Verification step
+        steps.append(ResearchStep(len(steps) + 1, "Cross-reference and verify information"))
+        
+        # Synthesis step
+        steps.append(ResearchStep(len(steps) + 1, "Synthesize findings and identify gaps"))
+        
+        return steps
     
     async def execute_step(self, step: ResearchStep, depth: int = 0) -> str:
         """Execute a single research step.
@@ -244,118 +258,174 @@ class DeepResearchAgent:
         if not self.plan:
             raise ValueError("No research plan exists")
         
-        # Calculate confidence based on verified findings
-        verified_count = sum(1 for f in self.findings if f.verified)
-        confidence = verified_count / len(self.findings) if self.findings else 0.0
+        # Calculate confidence based on verification
+        if self.findings:
+            verified_count = sum(1 for f in self.findings if f.verified)
+            self.confidence = verified_count / len(self.findings)
+        else:
+            self.confidence = 0.0
         
-        # Extract unique sources
-        sources = []
+        # Deduplicate sources
         seen_urls = set()
+        sources = []
         for finding in self.findings:
             if finding.source_url and finding.source_url not in seen_urls:
+                seen_urls.add(finding.source_url)
                 sources.append({
                     "url": finding.source_url,
                     "title": finding.source_title or "Untitled"
                 })
-                seen_urls.add(finding.source_url)
         
-        report = ResearchReport(
+        # Generate summary
+        summary = self._generate_summary()
+        
+        # Identify limitations
+        limitations = self._identify_limitations()
+        
+        # Generate recommendations
+        recommendations = self._generate_recommendations()
+        
+        return ResearchReport(
             topic=self.plan.topic,
-            summary=self.synthesize_findings()[:1000],  # Brief summary
-            findings=self.findings,
+            summary=summary,
+            findings=self.findings.copy(),
             sources=sources,
-            confidence=confidence,
-            limitations=[
-                "Search limited to web-accessible sources",
-                "Some findings may not be verified",
-                "Information may be time-sensitive"
-            ],
-            recommendations=[
-                "Verify critical findings with primary sources",
-                "Consider domain-specific databases for specialized topics",
-                "Check publication dates for time-sensitive information"
-            ],
+            confidence=self.confidence,
+            limitations=limitations,
+            recommendations=recommendations,
             completed_at=datetime.now().isoformat()
         )
+    
+    def _generate_summary(self) -> str:
+        """Generate a summary of the research."""
+        if not self.findings:
+            return f"Research on '{self.plan.topic}' yielded no findings."
         
-        return report
+        # Extract key points
+        key_points = []
+        for finding in self.findings[:5]:  # Top 5 findings
+            if finding.title:
+                key_points.append(finding.title)
+        
+        summary = f"Research on '{self.plan.topic}' identified {len(self.findings)} key findings. "
+        if key_points:
+            summary += f"Main topics include: {', '.join(key_points[:3])}. "
+        
+        if self.confidence > 0.7:
+            summary += "Findings are well-verified across multiple sources."
+        elif self.confidence > 0.4:
+            summary += "Findings have moderate verification."
+        else:
+            summary += "Findings require further verification."
+        
+        return summary
+    
+    def _identify_limitations(self) -> list[str]:
+        """Identify limitations in the research."""
+        limitations = []
+        
+        if not self.findings:
+            limitations.append("No findings were gathered during research.")
+            return limitations
+        
+        unverified_count = sum(1 for f in self.findings if not f.verified)
+        if unverified_count > len(self.findings) / 2:
+            limitations.append(f"{unverified_count} findings could not be verified across sources.")
+        
+        if len(self.findings) < 3:
+            limitations.append("Limited number of findings may not provide comprehensive coverage.")
+        
+        if len(self.search_history) < 3:
+            limitations.append("Research scope was limited by few search iterations.")
+        
+        return limitations
+    
+    def _generate_recommendations(self) -> list[str]:
+        """Generate recommendations based on research."""
+        recommendations = []
+        
+        if not self.findings:
+            recommendations.append("Consider refining the research topic or using alternative search terms.")
+            return recommendations
+        
+        # Check for gaps
+        if self.confidence < 0.5:
+            recommendations.append("Verify key findings through additional sources.")
+        
+        if len(self.findings) > 5:
+            recommendations.append("Consider focusing on specific subtopics for deeper analysis.")
+        
+        recommendations.append("Review the full source list for primary references.")
+        
+        return recommendations
 
 
 async def deep_research(
     topic: str,
     goals: list[str] | None = None,
     max_steps: int = 10,
-    max_depth: int = 3,
+    max_depth: int = 3
 ) -> str:
-    """Conduct deep research on a topic.
+    """Conduct deep multi-step research on a topic.
     
-    This tool performs multi-step autonomous research with:
-    - Initial broad search
-    - Iterative refinement
+    This tool performs comprehensive research with:
+    - Multi-step search and refinement
     - Source verification
     - Synthesis of findings
+    - Structured report generation
     
     Args:
         topic: Main research topic
-        goals: Specific research goals or questions
-        max_steps: Maximum research steps (default: 10)
-        max_depth: Maximum branching depth (default: 3)
+        goals: Optional list of specific research goals
+        max_steps: Maximum number of research steps (default: 10)
+        max_depth: Maximum branching depth for follow-ups (default: 3)
         
     Returns:
-        Comprehensive research report
-        
-    Example:
-        result = await deep_research(
-            "machine learning trends 2024",
-            goals=["Find latest developments", "Identify key players"]
-        )
+        Formatted research report with findings, sources, and analysis
         
     """
     with log_tool_call("deep_research", topic) as tool_log:
-        logger.info("Tool deep_research: starting research on %s", topic)
+        logger.info("Tool deep_research: %s (goals: %s, max_steps: %d, max_depth: %d)", 
+                   topic, goals, max_steps, max_depth)
         
         try:
-            # Initialize agent
             agent = DeepResearchAgent(max_steps=max_steps, max_depth=max_depth)
             
-            # Create plan
-            plan = agent.create_plan(topic, goals)
-            agent.plan = plan
+            # Create research plan
+            agent.plan = agent.create_plan(topic, goals)
+            
+            logger.info("Research plan: %d steps", len(agent.plan.steps))
             
             # Execute research steps
-            findings_count = 0
-            for i, step in enumerate(plan.steps[:max_steps]):
-                if i >= max_steps:
+            executed_steps = 0
+            for step in agent.plan.steps:
+                if executed_steps >= max_steps:
                     break
                 
                 # Execute step
-                results = await agent.execute_step(step)
+                await agent.execute_step(step)
+                executed_steps += 1
                 
-                # Parse findings from results
-                for line in results.split('\n\n'):
-                    if line.strip() and not line.strip().startswith('-'):
-                        # Extract finding
-                        lines = line.split('\n')
-                        if lines:
-                            title = lines[0].replace('- ', '').strip()
-                            content = '\n'.join(lines[1:]).strip()
-                            if title and content:
-                                finding = ResearchFinding(
-                                    title=title,
-                                    content=content[:500],  # Limit length
-                                    source_url=lines[1] if len(lines) > 1 else ""
-                                )
-                                agent.findings.append(finding)
-                                findings_count += 1
+                # Extract findings from step results
+                findings = _parse_search_results(step.findings)
+                agent.findings.extend(findings)
                 
-                # Log progress
-                logger.info(f"Step {i+1} completed, {findings_count} findings so far")
+                # Execute follow-up queries if available
+                if step.next_queries and agent.max_depth > 0:
+                    for follow_up in step.next_queries[:1]:  # Limit follow-ups
+                        if executed_steps >= max_steps:
+                            break
+                        follow_step = ResearchStep(
+                            step_number=executed_steps + 1,
+                            description=follow_up,
+                            query=follow_up
+                        )
+                        await agent.execute_step(follow_step, depth=1)
+                        executed_steps += 1
             
             # Verify some findings
-            verified_count = 0
             for finding in agent.findings[:5]:  # Verify top 5
-                if await agent.verify_finding(finding):
-                    verified_count += 1
+                await agent.verify_finding(finding)
             
             # Generate report
             report = agent.generate_report()
@@ -364,20 +434,19 @@ async def deep_research(
             output_parts = [
                 f"# Deep Research Report: {report.topic}",
                 "",
-                f"**Completed:** {report.completed_at}",
-                f"**Confidence:** {report.confidence:.0%}",
-                f"**Findings:** {len(report.findings)}",
-                f"**Verified:** {verified_count}",
+                f"**Completed**: {report.completed_at}",
+                f"**Confidence**: {report.confidence:.0%}",
+                f"**Findings**: {len(report.findings)}",
                 "",
                 "## Summary",
                 "",
-                report.summary[:2000],  # Limit summary length
+                report.summary,
                 "",
                 "## Key Findings",
                 ""
             ]
             
-            for i, finding in enumerate(report.findings[:10], 1):  # Top 10
+            for i, finding in enumerate(report.findings[:10], 1):  # Top 10 findings
                 verified_marker = "✓" if finding.verified else ""
                 output_parts.append(f"{i}. {verified_marker} **{finding.title}**")
                 output_parts.append(f"   {finding.content[:300]}")
@@ -388,8 +457,9 @@ async def deep_research(
             if report.sources:
                 output_parts.append("## Sources")
                 output_parts.append("")
-                for source in report.sources[:10]:
-                    output_parts.append(f"- [{source['title']}]({source['url']})")
+                for i, source in enumerate(report.sources[:10], 1):
+                    output_parts.append(f"{i}. {source.get('title', 'Untitled')}")
+                    output_parts.append(f"   {source.get('url', 'No URL')}")
                 output_parts.append("")
             
             if report.limitations:
@@ -397,6 +467,13 @@ async def deep_research(
                 output_parts.append("")
                 for limitation in report.limitations:
                     output_parts.append(f"- {limitation}")
+                output_parts.append("")
+            
+            if report.recommendations:
+                output_parts.append("## Recommendations")
+                output_parts.append("")
+                for rec in report.recommendations:
+                    output_parts.append(f"- {rec}")
                 output_parts.append("")
             
             result = "\n".join(output_parts)
@@ -428,12 +505,22 @@ async def quick_research(topic: str) -> str:
         try:
             results = await web_search(topic)
             
-            # Format results
+            # Parse and format results
+            findings = _parse_search_results(results)
+            
             output_parts = [
                 f"# Quick Research: {topic}",
                 "",
-                results
+                f"**Findings**: {len(findings)}",
+                ""
             ]
+            
+            for i, finding in enumerate(findings[:5], 1):
+                output_parts.append(f"{i}. **{finding.title}**")
+                output_parts.append(f"   {finding.content[:200]}")
+                if finding.source_url:
+                    output_parts.append(f"   Source: {finding.source_url}")
+                output_parts.append("")
             
             result = "\n".join(output_parts)
             tool_log.log_result("quick research completed")
@@ -463,24 +550,44 @@ async def compare_sources(query: str, sources: list[str] | None = None) -> str:
             # Search for the query
             results = await web_search(query)
             
-            # Look for consensus and disagreements
+            # Parse findings
+            findings = _parse_search_results(results)
+            
+            # Group by source
+            source_groups: dict[str, list[ResearchFinding]] = {}
+            for finding in findings:
+                source_key = finding.source_url or "Unknown source"
+                if source_key not in source_groups:
+                    source_groups[source_key] = []
+                source_groups[source_key].append(finding)
+            
+            # Build comparison
             output_parts = [
                 f"# Source Comparison: {query}",
                 "",
-                "## Search Results",
+                f"**Sources Found**: {len(source_groups)}",
                 "",
-                results,
-                "",
-                "## Analysis",
-                "",
-                "To properly compare sources, I would need to:"
+                "## Findings by Source",
+                ""
             ]
             
+            for source_url, source_findings in source_groups.items():
+                output_parts.append(f"### Source: {source_url}")
+                output_parts.append("")
+                for finding in source_findings[:3]:
+                    output_parts.append(f"- {finding.title}")
+                    output_parts.append(f"  {finding.content[:150]}")
+                output_parts.append("")
+            
+            # Consensus analysis
             output_parts.extend([
-                "- Visit each source directly",
-                "- Extract specific claims",
-                "- Identify agreements and disagreements",
-                "- Assess source credibility"
+                "## Analysis",
+                "",
+                "To identify consensus across sources:",
+                "- Look for repeated claims across multiple sources",
+                "- Note any disagreements or differing perspectives",
+                "- Consider source credibility and recency",
+                ""
             ])
             
             result = "\n".join(output_parts)
@@ -491,3 +598,63 @@ async def compare_sources(query: str, sources: list[str] | None = None) -> str:
             logger.error("compare_sources failed: %s", e)
             tool_log.log_result(f"error: {e}")
             return f"Comparison error: {e}"
+
+
+def _parse_search_results(results: str) -> list[ResearchFinding]:
+    """Parse web search results into ResearchFinding objects.
+    
+    Args:
+        results: Raw search results string
+        
+    Returns:
+        List of parsed ResearchFinding objects
+        
+    """
+    findings = []
+    
+    if not results or "no results" in results.lower():
+        return findings
+    
+    # Parse DuckDuckGo format:
+    # - Title
+    #   URL
+    #   Snippet
+    
+    lines = results.strip().split('\n')
+    current_finding = None
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Title line starts with "- "
+        if line.startswith('- '):
+            # Save previous finding
+            if current_finding:
+                findings.append(current_finding)
+            
+            current_finding = ResearchFinding(
+                title=line[2:].strip(),
+                content=""
+            )
+        
+        # URL line starts with "  " and contains http
+        elif line.startswith('  ') and 'http' in line.lower():
+            if current_finding:
+                current_finding.source_url = line.strip()
+        
+        # Snippet line
+        elif line.startswith('  ') and current_finding:
+            snippet = line.strip()
+            if current_finding.content:
+                current_finding.content += " " + snippet
+            else:
+                current_finding.content = snippet
+        
+        i += 1
+    
+    # Don't forget the last finding
+    if current_finding:
+        findings.append(current_finding)
+    
+    return findings

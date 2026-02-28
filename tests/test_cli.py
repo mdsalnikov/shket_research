@@ -21,8 +21,9 @@ def test_agent_help():
     )
     assert result.returncode == 0
     assert "run" in result.stdout
-    assert "bot" in result.stdout
     assert "status" in result.stdout
+    assert "memory" in result.stdout
+    assert "clear" in result.stdout
 
 
 def test_run_help_shows_provider():
