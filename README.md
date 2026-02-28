@@ -382,6 +382,8 @@ logs/                  # Log files
 **Development (lint/format):**  
 With dev deps (`pip install -e ".[dev]"`): `ruff check .` and `ruff format .`; tests: `pytest tests/ -v`.
 
+**CI (GitHub Actions):** On every push and PR to `main`, workflow **CI** runs ruff (check + format) and pytest (excluding LLM tests and `test_resumable_tasks`). Set branch protection so the PR cannot be merged until CI passes. If CI fails, run the agent to fix the branch (fix code, push, re-run CI); merge only when green, then restart the bot.
+
 ---
 
 ## Safety & Self-Preservation

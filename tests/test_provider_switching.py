@@ -28,7 +28,7 @@ class TestProviderCommand:
         # Should show current provider
         update.message.reply_text.assert_called_once()
         call_text = update.message.reply_text.call_args[0][0]
-        assert "Current Provider" in call_text
+        assert "Current provider" in call_text
 
     @pytest.mark.asyncio
     async def test_provider_command_switches_to_vllm(self):

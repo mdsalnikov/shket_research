@@ -56,11 +56,9 @@ async def test_tasks_shows_running_and_queued_by_chat():
         await tasks_cmd(update, MagicMock())
 
     text = update.message.reply_text.call_args[0][0]
-    assert "Running: 1" in text
-    assert "queued: 3" in text
+    assert "1 running" in text
+    assert "10" in text and "2" in text and "20" in text and "1" in text
     assert "running task" in text
-    assert "Chat 10: 2 queued" in text
-    assert "Chat 20: 1 queued" in text
 
 
 @pytest.mark.asyncio

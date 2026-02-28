@@ -302,12 +302,16 @@ async def tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
         return
     running = len(_active_tasks)
-    lines = [f"📋 *Active:* {running} running", f"📥 *Queued by chat:* {dict(_chat_queued_count) or 'none'}"]
-    if _active_tasks:
-        lines.append("\n*Running tasks:*")
-        for tid, info in list(_active_tasks.items())[:20]:
-            goal_preview = info.goal[:50] + ("…" if len(info.goal) > 50 else "")
-            lines.append(f"  {tid}: chat {info.chat_id} — {goal_preview}")
+    queued = dict(_chat_queued_count) or {}
+    if running == 0 and not queued:
+        lines = ["No active tasks."]
+    else:
+        lines = [f"📋 *Active:* {running} running", f"📥 *Queued by chat:* {queued or 'none'}"]
+        if _active_tasks:
+            lines.append("\n*Running tasks:*")
+            for tid, info in list(_active_tasks.items())[:20]:
+                goal_preview = info.task_text[:50] + ("…" if len(info.task_text) > 50 else "")
+                lines.append(f"  {tid}: chat {info.chat_id} — {goal_preview}")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -435,6 +439,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Create task info
     _task_counter += 1
+    my_task_id = _task_counter
     task_info = TaskInfo(
         task_text=task_text,
         chat_id=chat_id,
@@ -442,8 +447,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         user_id=user.id,
         provider=_current_provider,
     )
-    _active_tasks[_task_counter] = task_info
-    
+    _active_tasks[my_task_id] = task_info
+
     # Acquire chat lock
     lock = _get_chat_lock(chat_id)
     
@@ -486,9 +491,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             log_task_end(chat_id, False, duration, error=str(e))
             logger.exception("Task failed for chat_id=%s", chat_id)
-    
+
     # Clean up
-    del _active_tasks[_task_counter]
+    del _active_tasks[my_task_id]
 
 
 def run_bot() -> None:

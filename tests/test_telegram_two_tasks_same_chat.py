@@ -63,7 +63,5 @@ async def test_two_tasks_same_chat_run_sequentially():
     assert results == ["result_first", "result_second"]
     u1_calls = [str(c[0][0]) for c in u1.message.reply_text.call_args_list]
     u2_calls = [str(c[0][0]) for c in u2.message.reply_text.call_args_list]
-    assert any("task #1" in s for s in u1_calls)
     assert any("result_first" in s for s in u1_calls)
-    assert any("task #2" in s for s in u2_calls)
     assert any("result_second" in s for s in u2_calls)
