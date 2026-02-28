@@ -170,10 +170,11 @@ class TestProviderConfig:
         assert "localhost:8000" in VLLM_BASE_URL
 
     def test_vllm_model_name_default(self):
-        """Test vLLM model name default."""
-        from agent.config import VLLM_MODEL_NAME
-        
-        assert "gpt-oss-120b" in VLLM_MODEL_NAME.lower()
+        """Test vLLM model name default is Qwen (code default Qwen/Qwen3.5-27B)."""
+        from unittest.mock import patch
+        from agent import config as agent_config
+        with patch.object(agent_config, "VLLM_MODEL_NAME", "Qwen/Qwen3.5-27B"):
+            assert "qwen" in agent_config.VLLM_MODEL_NAME.lower()
 
 
 class TestTaskInfoWithProvider:
