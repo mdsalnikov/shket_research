@@ -10,6 +10,7 @@ Implements sliding window + summarization approach:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,6 +55,9 @@ class ContextCompressor:
     
     # Tool calls are valuable - always keep them
     TOOL_ROLES = {"tool", "tool_call"}
+    
+    # Maximum tool messages to preserve
+    MAX_TOOL_MESSAGES = 10
     
     def __init__(self, keep_recent: int = DEFAULT_KEEP_RECENT):
         """Initialize compressor.
@@ -102,23 +106,32 @@ class ContextCompressor:
         tool_messages = []
         recent_messages = []
         older_messages = []
+        system_messages = []
         
         # Get recent messages (last N)
         recent_start = max(0, len(history) - self.keep_recent)
         recent_messages = history[recent_start:]
         older_messages = history[:recent_start]
         
-        # Extract tool calls from older messages
+        # Extract system messages from older messages
         for msg in older_messages:
-            if self._is_tool_message(msg):
+            if msg.get("role") == "system":
+                system_messages.append(msg)
+            elif self._is_tool_message(msg):
                 tool_messages.append(msg)
         
-        # Create summary of older messages (excluding tools)
-        non_tool_older = [m for m in older_messages if not self._is_tool_message(m)]
+        # Create summary of older messages (excluding tools and system)
+        non_tool_older = [
+            m for m in older_messages 
+            if not self._is_tool_message(m) and m.get("role") != "system"
+        ]
         summary = self._summarize_messages(non_tool_older) if non_tool_older else None
         
         # Build compressed history
         compressed = []
+        
+        # Add system messages first (they're important for context)
+        compressed.extend(system_messages[:3])  # Keep up to 3 system messages
         
         # Add summary as context if available
         if summary:
@@ -129,7 +142,7 @@ class ContextCompressor:
             })
         
         # Add tool messages (they're important for context)
-        compressed.extend(tool_messages[-5:])  # Keep last 5 tool messages
+        compressed.extend(tool_messages[-self.MAX_TOOL_MESSAGES:])
         
         # Add recent messages
         compressed.extend(recent_messages)
@@ -162,8 +175,10 @@ class ContextCompressor:
     def _summarize_messages(self, messages: list[dict[str, Any]]) -> str:
         """Create a brief summary of messages.
         
-        For now, uses simple concatenation. In future, could use LLM
-        to generate meaningful summary.
+        Uses intelligent extraction of key information:
+        - User intent from user messages
+        - Key findings from assistant responses
+        - Tool usage patterns
         
         Args:
             messages: Messages to summarize
@@ -181,6 +196,7 @@ class ContextCompressor:
         
         summary_parts = []
         
+        # Count message types
         if user_messages:
             summary_parts.append(f"{len(user_messages)} user messages")
         
@@ -189,15 +205,66 @@ class ContextCompressor:
         
         # Get first user message (usually the original task)
         if user_messages:
-            first_user = str(user_messages[0].get("content", ""))[:100]
-            summary_parts.append(f"Started with: {first_user}...")
+            first_user = str(user_messages[0].get("content", ""))[:80]
+            # Clean up the text
+            first_user = re.sub(r'\s+', ' ', first_user).strip()
+            if first_user:
+                summary_parts.append(f"Started with: {first_user}...")
+        
+        # Get last user message (most recent context)
+        if len(user_messages) > 1:
+            last_user = str(user_messages[-1].get("content", ""))[:60]
+            last_user = re.sub(r'\s+', ' ', last_user).strip()
+            if last_user:
+                summary_parts.append(f"Last request: {last_user}...")
+        
+        # Extract key topics from assistant messages
+        if assistant_messages:
+            topics = self._extract_topics(assistant_messages)
+            if topics:
+                summary_parts.append(f"Topics: {', '.join(topics[:3])}")
         
         return " | ".join(summary_parts)
+    
+    def _extract_topics(self, messages: list[dict[str, Any]]) -> list[str]:
+        """Extract key topics from assistant messages.
+        
+        Simple keyword extraction based on common patterns.
+        
+        Args:
+            messages: Assistant messages to analyze
+            
+        Returns:
+            List of extracted topics
+            
+        """
+        topics = []
+        common_patterns = [
+            (r'files?\s*[:\s]+([a-zA-Z0-9_\-\.]+)', 'files'),
+            (r'directory(ies)?\s*[:\s]+([a-zA-Z0-9_\-/]+)', 'directories'),
+            (r'function(ality)?\s*[:\s]+([a-zA-Z0-9_\-]+)', 'functions'),
+            (r'class(es)?\s*[:\s]+([a-zA-Z0-9_\-]+)', 'classes'),
+            (r'module(s)?\s*[:\s]+([a-zA-Z0-9_\-]+)', 'modules'),
+        ]
+        
+        for msg in messages[:5]:  # Check first 5 messages
+            content = str(msg.get("content", ""))
+            for pattern, topic_type in common_patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match and match.lastindex and match.group(match.lastindex):
+                    # Get the last capturing group that matched
+                    matched_text = match.group(match.lastindex)[:20]
+                    topic = f"{topic_type}: {matched_text}"
+                    if topic not in topics:
+                        topics.append(topic)
+        
+        return topics
     
     def estimate_tokens(self, history: list[dict[str, Any]]) -> int:
         """Estimate token count for history.
         
         Simple estimation: ~4 characters per token for English.
+        More accurate for typical code/text content.
         
         Args:
             history: Conversation history
@@ -228,6 +295,48 @@ class ContextCompressor:
             
         """
         return self.estimate_tokens(history) > max_tokens
+    
+    def compress_to_token_limit(
+        self,
+        history: list[dict[str, Any]],
+        max_tokens: int,
+        safety_margin: float = 0.8,
+    ) -> CompressionResult:
+        """Compress history to fit within token limit.
+        
+        Uses iterative compression until history fits.
+        
+        Args:
+            history: Conversation history
+            max_tokens: Maximum allowed tokens
+            safety_margin: Keep to this fraction of max (default 0.8)
+            
+        Returns:
+            CompressionResult with compressed history
+            
+        """
+        target_tokens = int(max_tokens * safety_margin)
+        current_history = history
+        
+        # Iteratively compress until we fit
+        max_iterations = 10
+        for i in range(max_iterations):
+            estimated = self.estimate_tokens(current_history)
+            if estimated <= target_tokens:
+                break
+            
+            # Compress more aggressively each iteration
+            keep_recent = max(3, self.keep_recent - i * 2)
+            compressor = ContextCompressor(keep_recent=keep_recent)
+            result = compressor.compress(current_history)
+            current_history = result.compressed_history
+        
+        return CompressionResult(
+            compressed_history=current_history,
+            removed_count=len(history) - len(current_history),
+            summary=None,
+            compression_ratio=self.estimate_tokens(history) / self.estimate_tokens(current_history) if current_history else 1.0,
+        )
 
 
 async def compress_session_history(

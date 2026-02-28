@@ -507,3 +507,151 @@ async def test_run_with_retry_non_retryable_error():
             assert "лимит" in out.lower() or "limit" in out.lower()
             # Should only call run once
             assert mock_agent.run.call_count == 1
+
+
+# ============ New Error Type Tests ============
+
+def test_classifier_network_error():
+    """Network errors are classified correctly."""
+    classifier = ErrorClassifier()
+    
+    errors = [
+        ValueError("connection refused"),
+        RuntimeError("connection reset"),
+        Exception("network unreachable"),
+        RuntimeError("no such host"),
+        Exception("SSL error"),
+    ]
+    
+    for error in errors:
+        classified = classifier.classify(error)
+        assert classified.error_type == ErrorType.NETWORK_ERROR
+        assert classified.is_retryable is True
+        assert classified.suggested_action == "retry_with_backoff"
+
+
+def test_classifier_timeout():
+    """Timeout errors are classified correctly."""
+    classifier = ErrorClassifier()
+    
+    errors = [
+        ValueError("timeout exceeded"),
+        RuntimeError("request timeout"),
+        Exception("read timeout"),
+        RuntimeError("operation timed out"),
+        Exception("deadline exceeded"),
+    ]
+    
+    for error in errors:
+        classified = classifier.classify(error)
+        assert classified.error_type == ErrorType.TIMEOUT
+        assert classified.is_retryable is True
+        assert classified.suggested_action == "retry_with_backoff"
+
+
+def test_classifier_get_backoff_time():
+    """Backoff time is calculated correctly."""
+    classifier = ErrorClassifier()
+    
+    # Network error - exponential backoff
+    network_error = ValueError("connection refused")
+    assert classifier.get_backoff_time(network_error, 0) == 2
+    assert classifier.get_backoff_time(network_error, 1) == 4
+    assert classifier.get_backoff_time(network_error, 2) == 8
+    assert classifier.get_backoff_time(network_error, 5) == 60  # 2*32=64 capped at 60
+    assert classifier.get_backoff_time(network_error, 10) == 60  # Max capped at 60
+    
+    # Rate limit - use extracted wait time
+    rate_error = ValueError("retry after 45 seconds")
+    assert classifier.get_backoff_time(rate_error, 0) == 45
+    
+    # Default - small delay
+    default_error = ValueError("some error")
+    assert classifier.get_backoff_time(default_error, 0) == 1
+
+
+def test_fallback_network_error():
+    """Network error fallback has appropriate message."""
+    handler = FallbackHandler()
+    
+    error = ValueError("connection refused")
+    response = handler.generate_from_error(error)
+    
+    assert "Сетевая ошибка" in response or "network" in response.lower()
+
+
+def test_fallback_timeout():
+    """Timeout fallback has appropriate message."""
+    handler = FallbackHandler()
+    
+    error = ValueError("timeout exceeded")
+    response = handler.generate_from_error(error)
+    
+    assert "время ожидания" in response.lower() or "timeout" in response.lower()
+
+
+# ============ Compressor Enhancement Tests ============
+
+def test_compressor_keeps_system_messages():
+    """System messages are preserved during compression."""
+    compressor = ContextCompressor(keep_recent=3)
+    
+    history = [
+        {"role": "system", "content": "system prompt 1"},
+        {"role": "system", "content": "system prompt 2"},
+        {"role": "user", "content": "message 1"},
+        {"role": "assistant", "content": "response 1"},
+        {"role": "user", "content": "message 2"},
+        {"role": "assistant", "content": "response 2"},
+        {"role": "user", "content": "message 3"},
+    ]
+    
+    result = compressor.compress(history)
+    
+    # System messages should be preserved
+    system_messages = [m for m in result.compressed_history if m.get("role") == "system"]
+    assert len(system_messages) >= 2
+
+
+def test_compressor_extract_topics():
+    """Topics are extracted from messages."""
+    compressor = ContextCompressor()
+    
+    messages = [
+        {"role": "assistant", "content": "Found files: main.py, utils.py"},
+        {"role": "assistant", "content": "Checked directory: /src"},
+    ]
+    
+    topics = compressor._extract_topics(messages)
+    assert len(topics) > 0
+
+
+def test_compressor_summarize_messages():
+    """Messages are summarized correctly."""
+    compressor = ContextCompressor()
+    
+    messages = [
+        {"role": "user", "content": "What is in the directory?"},
+        {"role": "assistant", "content": "The directory contains main.py and utils.py"},
+        {"role": "user", "content": "Show me main.py"},
+    ]
+    
+    summary = compressor._summarize_messages(messages)
+    assert len(summary) > 0
+    assert "user messages" in summary.lower() or "assistant" in summary.lower()
+
+
+def test_compressor_compress_to_token_limit():
+    """History is compressed to fit token limit."""
+    compressor = ContextCompressor(keep_recent=10)
+    
+    # Create large history
+    history = [
+        {"role": "user", "content": "a" * 1000}
+        for _ in range(50)
+    ]
+    
+    result = compressor.compress_to_token_limit(history, max_tokens=5000)
+    
+    # Should be compressed
+    assert len(result.compressed_history) < len(history)

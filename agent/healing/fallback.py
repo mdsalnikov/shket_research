@@ -57,26 +57,42 @@ class FallbackHandler:
         "usage_limit": {
             "title": "⏸️ Превышен лимит использования",
             "suggestion": "Попробуйте позже или уменьшите сложность задачи.",
+            "details": "Достигнут лимит использования API. Это может быть связано с исчерпанием квоты или кредитов.",
         },
         "auth_error": {
             "title": "🔑 Ошибка аутентификации",
             "suggestion": "Проверьте API ключ или обратитесь к администратору.",
+            "details": "Не удалось аутентифицироваться. API ключ может быть недействительным или истёк срок его действия.",
         },
         "rate_limit": {
             "title": "⏳ Превышен лимит запросов",
             "suggestion": "Подождите немного и попробуйте снова.",
+            "details": "Слишком много запросов за короткое время. Сервер ограничивает частоту запросов.",
         },
         "context_overflow": {
             "title": "📄 Переполнение контекста",
             "suggestion": "Начните новую сессию или упростите задачу.",
+            "details": "Разговор стал слишком длинным для обработки моделью. Контекст был сжат или обрезан.",
+        },
+        "network_error": {
+            "title": "🌐 Сетевая ошибка",
+            "suggestion": "Проверьте подключение к интернету и попробуйте снова.",
+            "details": "Не удалось соединиться с сервером. Проверьте настройки сети.",
+        },
+        "timeout": {
+            "title": "⏱️ Превышено время ожидания",
+            "suggestion": "Попробуйте упростить задачу или запустите её снова.",
+            "details": "Запрос не был обработан в отведённое время. Сервер может быть перегружен.",
         },
         "fatal": {
             "title": "❌ Критическая ошибка",
             "suggestion": "Обратитесь к администратору.",
+            "details": "Произошла непредвиденная ошибка на стороне сервера.",
         },
         "unknown": {
             "title": "⚠️ Ошибка выполнения",
             "suggestion": "Попробуйте упростить задачу или начать заново.",
+            "details": "Произошла ошибка, которую не удалось классифицировать.",
         },
     }
     
@@ -84,12 +100,14 @@ class FallbackHandler:
         self,
         partial: PartialResult,
         include_partial_results: bool = True,
+        include_details: bool = True,
     ) -> str:
         """Generate fallback response from partial results.
         
         Args:
             partial: PartialResult with execution state
             include_partial_results: Whether to include tool results
+            include_details: Whether to include detailed error information
             
         Returns:
             Meaningful fallback response string
@@ -104,7 +122,7 @@ class FallbackHandler:
         parts.append("")  # Empty line
         
         # Add what was accomplished
-        if partial.tool_calls:
+        if partial.tool_calls and include_partial_results:
             parts.append("**Выполненные действия:**")
             for call in partial.tool_calls[:5]:  # Limit to first 5
                 tool_name = call.get("name", "unknown")
@@ -112,9 +130,23 @@ class FallbackHandler:
                 parts.append(f"• {tool_name}: {result_summary}")
             parts.append("")
         
+        # Add progress summary if we have messages
+        if partial.assistant_messages and include_partial_results:
+            parts.append("**Прогресс:**")
+            # Summarize what was accomplished
+            progress = self._summarize_progress(partial.assistant_messages)
+            if progress:
+                parts.append(progress)
+            parts.append("")
+        
         # Add error information
         if partial.error_message:
             parts.append(f"**Причина остановки:** {partial.error_message}")
+            parts.append("")
+        
+        # Add details if requested
+        if include_details and "details" in template:
+            parts.append(f"**Информация:** {template['details']}")
             parts.append("")
         
         # Add attempt count
@@ -149,6 +181,44 @@ class FallbackHandler:
         
         return result_str
     
+    def _summarize_progress(self, messages: list[str]) -> str:
+        """Summarize progress from assistant messages.
+        
+        Extracts key accomplishments from the conversation.
+        
+        Args:
+            messages: List of assistant messages
+            
+        Returns:
+            Summary of progress made
+            
+        """
+        if not messages:
+            return ""
+        
+        # Look for key indicators of progress
+        progress_indicators = [
+            ("файл", "файлы"),
+            ("каталог", "каталоги"),
+            ("код", "код"),
+            ("тест", "тесты"),
+            ("исследование", "исследования"),
+            ("результат", "результаты"),
+        ]
+        
+        found_items = []
+        last_message = messages[-1] if messages else ""
+        
+        for indicator, plural in progress_indicators:
+            if indicator in last_message.lower():
+                found_items.append(plural)
+        
+        if found_items:
+            return f"Были обработаны: {', '.join(found_items[:3])}"
+        
+        # Generic progress summary
+        return f"Выполнено {len(messages)} шагов"
+    
     def generate_from_error(
         self,
         error: Exception,
@@ -179,6 +249,8 @@ class FallbackHandler:
             ErrorType.AUTH_ERROR: "auth_error",
             ErrorType.RATE_LIMIT: "rate_limit",
             ErrorType.CONTEXT_OVERFLOW: "context_overflow",
+            ErrorType.NETWORK_ERROR: "network_error",
+            ErrorType.TIMEOUT: "timeout",
             ErrorType.FATAL: "fatal",
             ErrorType.RECOVERABLE: "unknown",
             ErrorType.UNKNOWN: "unknown",
@@ -229,6 +301,8 @@ class FallbackHandler:
             retry_context += "\nРекомендация: контекст слишком большой, попробуй использовать более краткие ответы или начни новую сессию.]"
         elif classified.suggested_action == "wait_and_retry":
             retry_context += "\nРекомендация: возник rate limit, подожди немного перед повтором.]"
+        elif classified.suggested_action == "retry_with_backoff":
+            retry_context += "\nРекомендация: произошла временная ошибка сети или таймаут, попробуй снова с задержкой.]"
         else:
             retry_context += "\nИсправь проблему и выполни задачу снова.]"
         
@@ -256,20 +330,18 @@ async def create_fallback_from_session(
     """
     handler = FallbackHandler()
     
-    # Get partial results from session
-    history = await deps.get_conversation_history(limit=20)
+    # Try to extract partial results from session
+    partial_results = []
+    try:
+        if hasattr(deps, 'get_conversation_history'):
+            history = await deps.get_conversation_history(limit=20)
+            for msg in history:
+                if msg.get('role') == 'tool':
+                    partial_results.append({
+                        'name': msg.get('tool_name', 'unknown'),
+                        'result': msg.get('content', ''),
+                    })
+    except Exception as e:
+        logger.debug(f"Could not extract partial results: {e}")
     
-    # Extract tool calls from history
-    tool_calls = []
-    for msg in history:
-        if msg.get("role") == "tool":
-            tool_calls.append({
-                "name": msg.get("tool_name", "unknown"),
-                "result": msg.get("content", ""),
-            })
-    
-    return handler.generate_from_error(
-        error,
-        attempt_count=attempt_count,
-        partial_results=tool_calls,
-    )
+    return handler.generate_from_error(error, attempt_count, partial_results)
