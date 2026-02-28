@@ -11,14 +11,11 @@ import logging
 import os
 import sqlite3
 import time
-from typing import Optional
 
 import aiosqlite
 
-from agent.config import PROJECT_ROOT
 from agent.session import (
     DEFAULT_DB_PATH,
-    MEMORY_CATEGORIES,
     SCOPE_MAIN,
     MemoryEntry,
     SessionMessage,
@@ -52,17 +49,17 @@ class SessionDB:
     Usage:
         db = SessionDB()
         await db.init()
-        
+
         # Create/get session
         session_id = await db.get_or_create_session(chat_id=12345)
-        
+
         # Add messages
         await db.add_message(session_id, "user", "Hello!")
         await db.add_message(session_id, "assistant", "Hi there!")
-        
+
         # Get history
         history = await db.get_messages(session_id, limit=20)
-        
+
         # Memory operations
         await db.save_memory(entry)
         results = await db.search_memory("api configuration")
@@ -112,7 +109,11 @@ class SessionDB:
                         pass
                     self._db = None
                 if attempt == 0:
-                    logger.warning("Database missing or corrupted (%s), creating new one: %s", type(e).__name__, e)
+                    logger.warning(
+                        "Database missing or corrupted (%s), creating new one: %s",
+                        type(e).__name__,
+                        e,
+                    )
                     _remove_db_files(self.db_path)
                 else:
                     raise
@@ -208,9 +209,7 @@ class SessionDB:
     async def _migrate_sessions_message_history(self) -> None:
         """Add message_history_json column to sessions if missing (for pydantic-ai native history)."""
         try:
-            await self._db.execute(
-                "ALTER TABLE sessions ADD COLUMN message_history_json TEXT"
-            )
+            await self._db.execute("ALTER TABLE sessions ADD COLUMN message_history_json TEXT")
             await self._db.commit()
             logger.info("Added sessions.message_history_json column")
         except sqlite3.OperationalError as e:
@@ -269,9 +268,7 @@ class SessionDB:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_resumable_tasks(
-        self, chat_id: int | None = None, limit: int = 20
-    ) -> list[dict]:
+    async def get_resumable_tasks(self, chat_id: int | None = None, limit: int = 20) -> list[dict]:
         """Return recent resumable tasks (any status), optionally for one chat_id, by updated_at DESC."""
         async with self._lock:
             if chat_id is not None:
@@ -349,12 +346,7 @@ class SessionDB:
             )
             await self._db.commit()
 
-    def _session_key(
-        self, 
-        chat_id: int, 
-        scope: str = SCOPE_MAIN,
-        agent_id: str = "shket"
-    ) -> str:
+    def _session_key(self, chat_id: int, scope: str = SCOPE_MAIN, agent_id: str = "shket") -> str:
         """Generate session key in OpenClaw format.
 
         Format: agent:<agentId>:<scope>:<chatId>
@@ -365,10 +357,7 @@ class SessionDB:
         return f"agent:{agent_id}:{scope}:{chat_id}"
 
     async def get_or_create_session(
-        self, 
-        chat_id: int, 
-        scope: str = SCOPE_MAIN,
-        agent_id: str = "shket"
+        self, chat_id: int, scope: str = SCOPE_MAIN, agent_id: str = "shket"
     ) -> int:
         """Get or create a session for the given chat_id.
 
@@ -376,7 +365,7 @@ class SessionDB:
             chat_id: Telegram chat ID
             scope: Session scope (main/per-peer/per-channel-peer)
             agent_id: Agent identifier
-            
+
         Returns:
             Session ID (integer primary key)
 
@@ -409,9 +398,7 @@ class SessionDB:
     async def get_session(self, session_id: int) -> dict | None:
         """Get session metadata by ID."""
         async with self._lock:
-            cursor = await self._db.execute(
-                "SELECT * FROM sessions WHERE id = ?", (session_id,)
-            )
+            cursor = await self._db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
             row = await cursor.fetchone()
             return dict(row) if row else None
 
@@ -435,7 +422,7 @@ class SessionDB:
             tool_params: Tool parameters dict
             tool_result: Tool result string
             metadata: Additional metadata dict
-            
+
         Returns:
             Message ID (integer primary key)
 
@@ -446,14 +433,23 @@ class SessionDB:
 
         async with self._lock:
             cursor = await self._db.execute(
-                """INSERT INTO messages 
+                """INSERT INTO messages
                    (session_id, role, content, timestamp, tool_name, tool_params, tool_result, metadata)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, role, content, now, tool_name, tool_params_json, tool_result, metadata_json),
+                (
+                    session_id,
+                    role,
+                    content,
+                    now,
+                    tool_name,
+                    tool_params_json,
+                    tool_result,
+                    metadata_json,
+                ),
             )
             # Update session updated_at and message_count
             await self._db.execute(
-                """UPDATE sessions 
+                """UPDATE sessions
                    SET updated_at = ?, message_count = message_count + 1
                    WHERE id = ?""",
                 (now, session_id),
@@ -462,10 +458,7 @@ class SessionDB:
             return cursor.lastrowid
 
     async def get_messages(
-        self, 
-        session_id: int, 
-        limit: int = 50,
-        offset: int = 0
+        self, session_id: int, limit: int = 50, offset: int = 0
     ) -> list[SessionMessage]:
         """Get messages from a session.
 
@@ -473,16 +466,16 @@ class SessionDB:
             session_id: Session ID
             limit: Maximum number of messages to return
             offset: Number of messages to skip
-            
+
         Returns:
             List of SessionMessage objects (oldest first)
 
         """
         async with self._lock:
             cursor = await self._db.execute(
-                """SELECT * FROM messages 
-                   WHERE session_id = ? 
-                   ORDER BY timestamp ASC 
+                """SELECT * FROM messages
+                   WHERE session_id = ?
+                   ORDER BY timestamp ASC
                    LIMIT ? OFFSET ?""",
                 (session_id, limit, offset),
             )
@@ -492,22 +485,20 @@ class SessionDB:
             for row in rows:
                 tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
                 metadata = json.loads(row["metadata"]) if row["metadata"] else None
-                messages.append(SessionMessage(
-                    role=row["role"],
-                    content=row["content"],
-                    timestamp=row["timestamp"],
-                    tool_name=row["tool_name"],
-                    tool_params=tool_params,
-                    tool_result=row["tool_result"],
-                    metadata=metadata,
-                ))
+                messages.append(
+                    SessionMessage(
+                        role=row["role"],
+                        content=row["content"],
+                        timestamp=row["timestamp"],
+                        tool_name=row["tool_name"],
+                        tool_params=tool_params,
+                        tool_result=row["tool_result"],
+                        metadata=metadata,
+                    )
+                )
             return messages
 
-    async def get_recent_messages(
-        self, 
-        session_id: int, 
-        limit: int = 20
-    ) -> list[SessionMessage]:
+    async def get_recent_messages(self, session_id: int, limit: int = 20) -> list[SessionMessage]:
         """Get most recent messages from a session (newest first).
 
         This is useful for building LLM context where you want the
@@ -516,16 +507,16 @@ class SessionDB:
         Args:
             session_id: Session ID
             limit: Maximum number of messages
-            
+
         Returns:
             List of SessionMessage objects (newest first)
 
         """
         async with self._lock:
             cursor = await self._db.execute(
-                """SELECT * FROM messages 
-                   WHERE session_id = ? 
-                   ORDER BY timestamp DESC 
+                """SELECT * FROM messages
+                   WHERE session_id = ?
+                   ORDER BY timestamp DESC
                    LIMIT ?""",
                 (session_id, limit),
             )
@@ -535,23 +526,21 @@ class SessionDB:
             for row in rows:
                 tool_params = json.loads(row["tool_params"]) if row["tool_params"] else None
                 metadata = json.loads(row["metadata"]) if row["metadata"] else None
-                messages.append(SessionMessage(
-                    role=row["role"],
-                    content=row["content"],
-                    timestamp=row["timestamp"],
-                    tool_name=row["tool_name"],
-                    tool_params=tool_params,
-                    tool_result=row["tool_result"],
-                    metadata=metadata,
-                ))
+                messages.append(
+                    SessionMessage(
+                        role=row["role"],
+                        content=row["content"],
+                        timestamp=row["timestamp"],
+                        tool_name=row["tool_name"],
+                        tool_params=tool_params,
+                        tool_result=row["tool_result"],
+                        metadata=metadata,
+                    )
+                )
             # Reverse to get chronological order
             return list(reversed(messages))
 
-    async def get_conversation_history(
-        self, 
-        session_id: int,
-        limit: int = 20
-    ) -> list[dict]:
+    async def get_conversation_history(self, session_id: int, limit: int = 20) -> list[dict]:
         """Get conversation history in format suitable for LLM context.
 
         Returns messages in chronological order with role and content,
@@ -560,7 +549,7 @@ class SessionDB:
         Args:
             session_id: Session ID
             limit: Maximum number of messages
-            
+
         Returns:
             List of dicts with 'role' and 'content' keys
 
@@ -575,27 +564,20 @@ class SessionDB:
 
         """
         async with self._lock:
-            await self._db.execute(
-                "DELETE FROM messages WHERE session_id = ?", (session_id,)
-            )
+            await self._db.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             await self._db.execute(
                 "UPDATE sessions SET message_count = 0, updated_at = ? WHERE id = ?",
                 (time.time(), session_id),
             )
             await self._db.commit()
 
-
-    async def get_session_stats(
-        self, 
-        session_id: int,
-        include_last_messages: int = 5
-    ) -> dict:
+    async def get_session_stats(self, session_id: int, include_last_messages: int = 5) -> dict:
         """Get session statistics including message count and estimated tokens.
 
         Args:
             session_id: Session ID
             include_last_messages: Number of last messages to include in stats
-            
+
         Returns:
             Dict with:
             - session_id: int
@@ -608,33 +590,36 @@ class SessionDB:
 
         """
         from datetime import datetime
-        
+
         # Get session metadata
         session = await self.get_session(session_id)
         if not session:
             return {"error": "Session not found"}
-        
+
         # Get recent messages for token estimation
         messages = await self.get_recent_messages(session_id, limit=100)
-        
+
         # Estimate tokens (rough: ~4 chars per token for English, ~2 for Russian)
         total_chars = sum(len(m.content) for m in messages)
         # Conservative estimate: 3 chars per token (mixed content)
         estimated_tokens = total_chars // 3
-        
+
         # Get last messages preview
         last_messages = []
         for msg in messages[-include_last_messages:]:
-            last_messages.append({
-                "role": msg.role,
-                "content_preview": msg.content[:100] + ("..." if len(msg.content) > 100 else ""),
-                "chars": len(msg.content),
-            })
-        
+            last_messages.append(
+                {
+                    "role": msg.role,
+                    "content_preview": msg.content[:100]
+                    + ("..." if len(msg.content) > 100 else ""),
+                    "chars": len(msg.content),
+                }
+            )
+
         created_at = datetime.fromtimestamp(session["created_at"])
         updated_at = datetime.fromtimestamp(session["updated_at"])
         now = datetime.now()
-        
+
         return {
             "session_id": session_id,
             "chat_id": session.get("chat_id"),
@@ -664,7 +649,7 @@ class SessionDB:
         now = time.time()
         async with self._lock:
             await self._db.execute(
-                """INSERT INTO memory 
+                """INSERT INTO memory
                    (key, category, l0_abstract, l1_overview, l2_details, created_at, updated_at, confidence)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(key) DO UPDATE SET
@@ -674,8 +659,16 @@ class SessionDB:
                        l2_details = excluded.l2_details,
                        updated_at = excluded.updated_at,
                        confidence = excluded.confidence""",
-                (entry.key, entry.category, entry.l0_abstract, entry.l1_overview, 
-                 entry.l2_details, now, now, entry.confidence),
+                (
+                    entry.key,
+                    entry.category,
+                    entry.l0_abstract,
+                    entry.l1_overview,
+                    entry.l2_details,
+                    now,
+                    now,
+                    entry.confidence,
+                ),
             )
             await self._db.commit()
 
@@ -686,7 +679,7 @@ class SessionDB:
 
         Args:
             key: Memory key to retrieve
-            
+
         Returns:
             MemoryEntry if found, None otherwise
 
@@ -698,9 +691,7 @@ class SessionDB:
         )
         await self._db.commit()
 
-        cursor = await self._db.execute(
-            "SELECT * FROM memory WHERE key = ?", (key,)
-        )
+        cursor = await self._db.execute("SELECT * FROM memory WHERE key = ?", (key,))
         row = await cursor.fetchone()
         if not row:
             return None
@@ -718,10 +709,7 @@ class SessionDB:
         )
 
     async def search_memory(
-        self, 
-        query: str, 
-        category: str | None = None,
-        limit: int = 10
+        self, query: str, category: str | None = None, limit: int = 10
     ) -> list[MemoryEntry]:
         """Search memory using FTS5 full-text search.
 
@@ -729,7 +717,7 @@ class SessionDB:
             query: Search query (supports FTS5 syntax)
             category: Optional category filter
             limit: Maximum results to return
-            
+
         Returns:
             List of matching MemoryEntry objects
 
@@ -757,17 +745,19 @@ class SessionDB:
         rows = await cursor.fetchall()
         entries = []
         for row in rows:
-            entries.append(MemoryEntry(
-                key=row["key"],
-                category=row["category"],
-                l0_abstract=row["l0_abstract"],
-                l1_overview=row["l1_overview"] or "",
-                l2_details=row["l2_details"] or "",
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-                confidence=row["confidence"],
-                access_count=row["access_count"],
-            ))
+            entries.append(
+                MemoryEntry(
+                    key=row["key"],
+                    category=row["category"],
+                    l0_abstract=row["l0_abstract"],
+                    l1_overview=row["l1_overview"] or "",
+                    l2_details=row["l2_details"] or "",
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    confidence=row["confidence"],
+                    access_count=row["access_count"],
+                )
+            )
         return entries
 
     async def get_l0_overview(self) -> dict[str, list[str]]:
@@ -781,7 +771,7 @@ class SessionDB:
 
         """
         cursor = await self._db.execute(
-            """SELECT category, l0_abstract FROM memory 
+            """SELECT category, l0_abstract FROM memory
                ORDER BY category, confidence DESC"""
         )
         rows = await cursor.fetchall()
@@ -817,22 +807,18 @@ class SessionDB:
 
         Args:
             key: Memory key to delete
-            
+
         Returns:
             True if deleted, False if not found
 
         """
         async with self._lock:
-            cursor = await self._db.execute(
-                "DELETE FROM memory WHERE key = ?", (key,)
-            )
+            cursor = await self._db.execute("DELETE FROM memory WHERE key = ?", (key,))
             await self._db.commit()
             return cursor.rowcount > 0
 
     async def get_all_categories(self) -> list[str]:
         """Get all memory categories in use."""
-        cursor = await self._db.execute(
-            "SELECT DISTINCT category FROM memory ORDER BY category"
-        )
+        cursor = await self._db.execute("SELECT DISTINCT category FROM memory ORDER BY category")
         rows = await cursor.fetchall()
         return [row["category"] for row in rows]

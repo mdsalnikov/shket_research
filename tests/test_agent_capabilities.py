@@ -24,11 +24,11 @@ skip_no_backend = pytest.mark.skipif(
 
 
 def _build_agent():
-    from agent.core.agent import build_agent
+    from agent.core.agent import create_agent
 
     if USE_VLLM:
-        return build_agent(provider="vllm")
-    return build_agent(model_name=TEST_MODEL)
+        return create_agent(provider="vllm")
+    return create_agent(model_name=TEST_MODEL)
 
 
 @skip_no_backend
@@ -97,9 +97,7 @@ async def test_web_search():
 async def test_git_status():
     """Agent should run git_status and include branch or status in the answer."""
     agent = _build_agent()
-    result = await agent.run(
-        "Run git_status and tell me the current branch or status."
-    )
+    result = await agent.run("Run git_status and tell me the current branch or status.")
     output = result.output.lower()
     assert "branch" in output or "clean" in output or "modified" in output
 
@@ -146,11 +144,15 @@ async def test_message_history_continuity():
         )
         # Model may say exact phrase or reference prior turn (continuity proven)
         r2_lower = r2.lower()
-        ok = (
-            "continuity_ok" in r2_lower
-            or any(
-                ref in r2_lower
-                for ref in ("context", "previous", "continuity", "last reply", "back-and-forth", "continue")
+        ok = "continuity_ok" in r2_lower or any(
+            ref in r2_lower
+            for ref in (
+                "context",
+                "previous",
+                "continuity",
+                "last reply",
+                "back-and-forth",
+                "continue",
             )
         )
         assert ok, f"Second run should see first-run context; got: {r2[:200]!r}"

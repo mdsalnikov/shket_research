@@ -10,13 +10,13 @@ Format example:
   2026-02-27 20:09:03 | 🤖 AGENT: готово
 """
 
+import functools
 import os
 import time
-import functools
 from datetime import datetime
-from typing import Callable, Any
+from typing import Any, Callable
 
-from agent.config import PROJECT_ROOT, BOT_ERRORS_LOG
+from agent.config import BOT_ERRORS_LOG, PROJECT_ROOT
 
 ACTIVITY_LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "activity.log")
 
@@ -79,7 +79,9 @@ class ToolCallLogger:
         if self.params:
             if isinstance(self.params, dict):
                 # Increase per-param truncation to 300 chars for better visibility
-                params_str = " | " + ", ".join(f"{k}={_truncate(str(v), 300)}" for k, v in self.params.items())
+                params_str = " | " + ", ".join(
+                    f"{k}={_truncate(str(v), 300)}" for k, v in self.params.items()
+                )
             else:
                 # Show up to 2000 characters of raw params
                 params_str = f" | {_truncate(str(self.params), 2000)}"
@@ -91,7 +93,10 @@ class ToolCallLogger:
         duration = time.time() - self.start_time
         if exc_type:
             with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{_timestamp()} | ❌ {self.tool_name} → ERROR: {_truncate(str(exc_val), 2000)} ({duration:.2f}s)\n")
+                f.write(
+                    f"{_timestamp()} | ❌ {self.tool_name} → ERROR: "
+                    f"{_truncate(str(exc_val), 2000)} ({duration:.2f}s)\n"
+                )
         return False  # Don't suppress exceptions
 
     def log_result(self, result: str) -> None:
@@ -99,7 +104,10 @@ class ToolCallLogger:
         duration = time.time() - self.start_time
         # Show up to 3000 characters of result for detailed debugging
         with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{_timestamp()} | ✅ {self.tool_name} → {_truncate(result, 3000)} ({duration:.2f}s)\n")
+            f.write(
+                f"{_timestamp()} | ✅ {self.tool_name} → "
+                f"{_truncate(result, 3000)} ({duration:.2f}s)\n"
+            )
 
 
 def log_tool_call(tool_name: str | None = None, context: str | None = None):
@@ -116,31 +124,36 @@ def log_tool_call(tool_name: str | None = None, context: str | None = None):
         def wrapper(*args, **kwargs) -> Any:
             # Use provided name or function name
             name = tool_name if tool_name else func.__name__
-            
+
             # Prepare params string
             params = {}
             if args:
                 # Get parameter names from function signature
                 import inspect
+
                 sig = inspect.signature(func)
                 param_names = list(sig.parameters.keys())
                 for i, arg in enumerate(args):
                     if i < len(param_names):
                         params[param_names[i]] = arg
             params.update(kwargs)
-            
-            params_str = ", ".join(f"{k}={_truncate(str(v), 300)}" for k, v in params.items()) if params else None
-            
+
+            params_str = (
+                ", ".join(f"{k}={_truncate(str(v), 300)}" for k, v in params.items())
+                if params
+                else None
+            )
+
             with ToolCallLogger(name, params_str) as logger:
                 try:
                     result = func(*args, **kwargs)
                     logger.log_result(_truncate(str(result), 3000))
                     return result
-                except Exception as e:
+                except Exception:
                     raise
-        
+
         return wrapper
-    
+
     # If called without parentheses (e.g., @log_tool_call), tool_name will be the function
     if callable(tool_name):
         func = tool_name

@@ -51,7 +51,8 @@ def _list_backup_dirs() -> list[str]:
     if not os.path.isdir(PROJECT_ROOT):
         return []
     names = [
-        n for n in os.listdir(PROJECT_ROOT)
+        n
+        for n in os.listdir(PROJECT_ROOT)
         if n.startswith(".backup_") and os.path.isdir(os.path.join(PROJECT_ROOT, n))
     ]
     return sorted(names)

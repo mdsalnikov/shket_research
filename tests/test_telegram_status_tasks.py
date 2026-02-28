@@ -1,14 +1,15 @@
 """Tests for /status and /tasks showing running and queued counts."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent.interfaces.telegram import (
-    status_cmd,
-    tasks_cmd,
+    TaskInfo,
     _active_tasks,
     _chat_queued_count,
-    TaskInfo,
+    status_cmd,
+    tasks_cmd,
 )
 
 

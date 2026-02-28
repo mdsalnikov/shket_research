@@ -1,11 +1,12 @@
 """Tests for dependencies module with OpenClaw-inspired session management."""
 
-import pytest
-import tempfile
 import os
+import tempfile
 
-from agent.session_db import SessionDB
+import pytest
+
 from agent.session import MEMORY_CATEGORIES
+from agent.session_db import SessionDB
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ async def session_db(temp_db_path):
 
 
 # ============ AgentDeps Creation Tests ============
+
 
 @pytest.mark.asyncio
 async def test_agent_deps_creation(session_db):
@@ -54,6 +56,7 @@ async def test_agent_deps_with_scope(session_db):
 
 
 # ============ Message Operations Tests ============
+
 
 @pytest.mark.asyncio
 async def test_agent_deps_message_operations(session_db):
@@ -110,6 +113,7 @@ async def test_agent_deps_tool_call_logging(session_db):
 
 # ============ Memory Operations Tests ============
 
+
 @pytest.mark.asyncio
 async def test_agent_deps_memory_operations(session_db):
     """Test memory operations through AgentDeps."""
@@ -140,12 +144,14 @@ async def test_agent_deps_memory_full_hierarchy(session_db):
         l2_details="Full detailed information about the project including all specifics.",
         confidence=0.95,
     )
-    
+
     entry = await deps.recall_memory("full_test")
     assert entry is not None
     assert entry.l0_abstract == "Quick summary"
     assert entry.l1_overview == "Two or three sentence overview of the project."
-    assert entry.l2_details == "Full detailed information about the project including all specifics."
+    assert (
+        entry.l2_details == "Full detailed information about the project including all specifics."
+    )
     assert entry.confidence == 0.95
 
 
@@ -189,10 +195,10 @@ async def test_agent_deps_memory_delete(session_db):
     deps = AgentDeps(db=session_db, session_id=session_id, chat_id=12345)
 
     await deps.save_memory("test_delete", "Project", "Test")
-    
+
     deleted = await deps.delete_memory("test_delete")
     assert deleted is True
-    
+
     entry = await deps.recall_memory("test_delete")
     assert entry is None
 
@@ -212,7 +218,7 @@ async def test_agent_deps_context_summary(session_db):
     # Add some memories
     await deps.save_memory("s1", "System", "System config")
     await deps.save_memory("p1", "Project", "Project status")
-    
+
     summary = await deps.get_context_summary()
     assert "System" in summary
     assert "Project" in summary
@@ -220,6 +226,7 @@ async def test_agent_deps_context_summary(session_db):
 
 
 # ============ Category Validation Tests ============
+
 
 @pytest.mark.asyncio
 async def test_agent_deps_memory_category_validation(session_db):
@@ -231,7 +238,7 @@ async def test_agent_deps_memory_category_validation(session_db):
 
     # Invalid category should be replaced with 'Project'
     await deps.save_memory("test", "InvalidCategory", "Test abstract")
-    
+
     entry = await deps.recall_memory("test")
     assert entry.category == "Project"
 
@@ -246,7 +253,7 @@ async def test_agent_deps_all_memory_categories(session_db):
 
     for category in MEMORY_CATEGORIES:
         await deps.save_memory(f"test_{category}", category, f"Test for {category}")
-    
+
     for category in MEMORY_CATEGORIES:
         entry = await deps.recall_memory(f"test_{category}")
         assert entry is not None
@@ -254,6 +261,7 @@ async def test_agent_deps_all_memory_categories(session_db):
 
 
 # ============ Runtime State Tests ============
+
 
 @pytest.mark.asyncio
 async def test_agent_deps_runtime_state(session_db):

@@ -1,15 +1,15 @@
 """Test two messages from same user (same chat): run in order, responses in order."""
 
 import asyncio
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from agent.interfaces.telegram import (
-    handle_message,
     _active_tasks,
     _chat_locks,
     _chat_queued_count,
+    handle_message,
 )
 
 
@@ -41,7 +41,9 @@ async def test_two_tasks_same_chat_run_sequentially():
     call_order = []
     results = []
 
-    async def mock_run_task(text, chat_id, username=None, user_id=None, provider=None, resumable_task_id=None, **kwargs):
+    async def mock_run_task(
+        text, chat_id, username=None, user_id=None, provider=None, resumable_task_id=None, **kwargs
+    ):
         call_order.append(text)
         if "first" in text:
             await asyncio.sleep(0.1)

@@ -36,6 +36,8 @@ async def run_shell(command: str) -> str:
             result = "error: command timed out after 30s"
         except Exception as e:
             result = f"error: {e}"
-        
-        tool_log.log_result(f"exit_code={proc.returncode if 'proc' in dir() else '?'}, output_len={len(output) if 'output' in dir() else 0}")
+
+        tool_log.log_result(
+            f"exit_code={proc.returncode if 'proc' in dir() else '?'}, output_len={len(output) if 'output' in dir() else 0}"
+        )
         return result

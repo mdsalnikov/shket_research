@@ -1,6 +1,7 @@
 """Tests for run_with_retry self-healing."""
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 

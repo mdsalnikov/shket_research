@@ -32,7 +32,7 @@ def need_self_repair() -> bool:
     if not text.strip():
         return False
     # Require something that looks like a traceback or exception
-    if "Traceback" in text or "Error:" in text or "Exception" in text or "File \"" in text:
+    if "Traceback" in text or "Error:" in text or "Exception" in text or 'File "' in text:
         return True
     return False
 

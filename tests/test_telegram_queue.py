@@ -5,11 +5,10 @@ import asyncio
 import pytest
 
 from agent.interfaces.telegram import (
-    _get_chat_lock,
+    _active_tasks,
     _chat_locks,
     _chat_queued_count,
-    _active_tasks,
-    TaskInfo,
+    _get_chat_lock,
 )
 
 

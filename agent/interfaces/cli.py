@@ -5,15 +5,16 @@ import asyncio
 import logging
 from pathlib import Path
 
-from agent.config import LOG_FILE, PROVIDER_DEFAULT, setup_logging
-from agent.session_globals import close_db, get_db
+from agent.config import LOG_FILE, PROVIDER_DEFAULT
 from agent.progress import get_tracker
+from agent.session_globals import close_db, get_db
 
 logger = logging.getLogger(__name__)
 
 # Read version from VERSION file
 VERSION_FILE = Path(__file__).parent.parent.parent / "VERSION"
 VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "unknown"
+
 
 def _builtin_status() -> str:
     """Return a concise status string used by both the `status` sub‑command
@@ -36,16 +37,16 @@ def _builtin_status() -> str:
 
 async def _run_task(task: str, provider: str | None = None) -> None:
     """Run a task with session support (CLI mode uses chat_id=0).
-    
+
     Shortcut: if the user asked for the built‑in status we handle it
     locally instead of sending it to the LLM. This prevents the
     ``Exceeded maximum retries`` validation error observed when calling
     ``python -m agent run status``.
-    
+
     Args:
         task: Task description
         provider: 'vllm' or 'openrouter' (default: from config)
-    
+
     """
     if task.strip().lower() == "status":
         print(_builtin_status())
@@ -53,22 +54,23 @@ async def _run_task(task: str, provider: str | None = None) -> None:
         return
 
     from agent.core.runner import run_with_retry
-    
+
     # Configure progress tracker for CLI
     tracker = get_tracker(chat_id=0, is_cli=True)
-    
+
     # Set up CLI callback for progress updates
     def cli_progress_callback(message: str) -> None:
         """Callback for progress updates in CLI."""
         print(message, flush=True)
-    
+
     tracker.cli_callback = cli_progress_callback
-    
+
     try:
         output = await run_with_retry(task, chat_id=0, provider=provider)
         print("\n" + output)
     finally:
         await close_db()
+
 
 async def _show_memory_summary() -> None:
     """Show memory summary."""
@@ -105,35 +107,36 @@ async def _clear_context() -> None:
 
 async def _show_context() -> None:
     """Show current session context info (CLI uses chat_id=0)."""
-    from datetime import datetime
-    
+
     try:
         db = await get_db()
         session_id = await db.get_or_create_session(0)  # CLI uses chat_id=0
         stats = await db.get_session_stats(session_id, include_last_messages=5)
-        
+
         if "error" in stats:
             print(f"Error: {stats['error']}")
             return
-        
+
         print("=== Session Context ===\n")
         print(f"📝 Messages: {stats['message_count']}")
         print(f"🔤 Estimated tokens: {stats['estimated_tokens']:,}")
         print(f"📏 Total chars: {stats['total_chars']:,}")
         print(f"\n⏱ Session created: {stats['created_at']}")
         print(f"🕐 Last activity: {stats['updated_at']}")
-        
+
         uptime_h = int(stats["uptime_seconds"] // 3600)
         uptime_m = int((stats["uptime_seconds"] % 3600) // 60)
         print(f"   Session age: {uptime_h}h {uptime_m}m")
-        
+
         idle_m = int(stats["idle_seconds"] // 60)
         print(f"   Idle: {idle_m}m ago")
-        
+
         if stats["last_messages"]:
             print(f"\n--- Last {len(stats['last_messages'])} messages ---")
             for msg in stats["last_messages"]:
-                role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(msg["role"], "📄")
+                role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️", "tool": "🔧"}.get(
+                    msg["role"], "📄"
+                )
                 print(f"\n{role_emoji} [{msg['role']}] ({msg['chars']} chars)")
                 print(f"   {msg['content_preview']}")
 
@@ -145,7 +148,8 @@ async def _resume_task() -> None:
     """Load one incomplete resumable task, run resume, print result (no Telegram)."""
     from agent.config import PROVIDER_DEFAULT
     from agent.core.runner import run_task_with_session
-    from agent.interfaces.telegram import _build_resume_prompt, MAX_RESUME_COUNT
+    from agent.interfaces.telegram import MAX_RESUME_COUNT, _build_resume_prompt
+
     try:
         db = await get_db()
         incomplete = await db.get_incomplete_resumable_tasks()
@@ -191,7 +195,9 @@ async def _long_list(chat_id: int | None = None, limit: int = 20) -> None:
         print("-" * 60)
         for t in tasks:
             goal = (t["goal"] or "")[:40] + ("…" if len(t["goal"] or "") > 40 else "")
-            print(f"{t['id']:<5} {t['status']:<11} {t['chat_id']:<8} {t.get('resume_count', 0)}      {goal}")
+            print(
+                f"{t['id']:<5} {t['status']:<11} {t['chat_id']:<8} {t.get('resume_count', 0)}      {goal}"
+            )
     finally:
         await close_db()
 
@@ -205,7 +211,9 @@ async def _long_show(task_id: int) -> None:
             print(f"Task {task_id} not found.")
             await close_db()
             return
-        print(f"ID: {t['id']}  status: {t['status']}  chat_id: {t['chat_id']}  resume_count: {t.get('resume_count', 0)}")
+        print(
+            f"ID: {t['id']}  status: {t['status']}  chat_id: {t['chat_id']}  resume_count: {t.get('resume_count', 0)}"
+        )
         print(f"created_at: {t.get('created_at')}  updated_at: {t.get('updated_at')}")
         if t.get("last_error"):
             print(f"last_error: {t['last_error']}")
@@ -243,7 +251,7 @@ def main():
     sub.add_parser("context", help="Show session context")
     sub.add_parser("resume", help="Resume incomplete task")
     sub.add_parser("bot", help="Start Telegram bot")
-    
+
     long_parser = sub.add_parser("long", help="Long-running commands")
     long_sub = long_parser.add_subparsers(dest="long_cmd")
     long_list_parser = long_sub.add_parser("list", help="List resumable tasks")
@@ -255,8 +263,12 @@ def main():
     logs_parser = sub.add_parser("logs", help="Show log tail")
     logs_parser.add_argument("n", type=int, nargs="?", default=30, help="Number of lines")
 
-    repair_parser = sub.add_parser("self-repair-check", help="Check logs and run self-repair (cron: merge PR, restart)")
-    repair_parser.add_argument("--dry-run", action="store_true", help="Only run agent, do not merge PR or restart")
+    repair_parser = sub.add_parser(
+        "self-repair-check", help="Check logs and run self-repair (cron: merge PR, restart)"
+    )
+    repair_parser.add_argument(
+        "--dry-run", action="store_true", help="Only run agent, do not merge PR or restart"
+    )
     repair_parser.add_argument("--provider", choices=["vllm", "openrouter"], help="LLM provider")
 
     args = parser.parse_args()
@@ -283,6 +295,7 @@ def main():
         asyncio.run(_resume_task())
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
+
         run_bot()
     elif args.command == "long":
         if args.long_cmd == "list":
@@ -295,6 +308,7 @@ def main():
         _show_logs(args.n)
     elif args.command == "self-repair-check":
         from agent.self_repair_cron import run_self_repair_check
+
         exit(run_self_repair_check(dry_run=args.dry_run, provider=args.provider))
     else:
         parser.print_help()

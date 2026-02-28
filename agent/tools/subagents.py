@@ -19,7 +19,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -35,6 +34,7 @@ SUBAGENTS_DIR = Path(PROJECT_ROOT) / "subagents"
 @dataclass
 class Subagent:
     """Represents a specialized subagent."""
+
     name: str
     description: str
     version: str = "1.0.0"
@@ -46,7 +46,7 @@ class Subagent:
     config: dict = field(default_factory=dict)
     path: Path | None = None
     file_format: str = "yaml"  # "yaml" or "md"
-    
+
     def matches_trigger(self, task: str) -> bool:
         """Check if task matches any of this subagent's triggers."""
         task_lower = task.lower()
@@ -55,34 +55,34 @@ class Subagent:
 
 class SubagentRegistry:
     """Registry for managing subagents."""
-    
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self.subagents: dict[str, Subagent] = {}
         self._ensure_subagents_dir()
         self._create_default_subagents()
         self._load_subagents()
         self._initialized = True
-    
+
     def _ensure_subagents_dir(self):
         """Ensure subagents directory exists."""
         SUBAGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     def _create_default_subagents(self):
         """Create default subagent definitions if none exist."""
         if any(SUBAGENTS_DIR.glob("*.yaml")) or any(SUBAGENTS_DIR.glob("*.md")):
             return  # Subagents already exist
-        
+
         default_subagents = {
             "coder.yaml": {
                 "name": "coder",
@@ -100,15 +100,25 @@ Always:
 3. Test your changes
 4. Commit with clear messages""",
                 "tools": [
-                    "read_file", "write_file", "list_dir",
-                    "run_shell", "git_status", "git_add", "git_commit"
+                    "read_file",
+                    "write_file",
+                    "list_dir",
+                    "run_shell",
+                    "git_status",
+                    "git_add",
+                    "git_commit",
                 ],
                 "context_files": ["AGENTS.md", "README.md"],
                 "triggers": [
-                    "write code", "implement", "refactor", "add function",
-                    "create class", "modify code", "fix bug"
+                    "write code",
+                    "implement",
+                    "refactor",
+                    "add function",
+                    "create class",
+                    "modify code",
+                    "fix bug",
                 ],
-                "related": ["reviewer", "tester"]
+                "related": ["reviewer", "tester"],
             },
             "researcher.yaml": {
                 "name": "researcher",
@@ -126,15 +136,23 @@ Research workflow:
 3. Verify information across sources
 4. Synthesize and report findings""",
                 "tools": [
-                    "web_search", "read_file", "write_file",
-                    "create_todo", "get_todo", "mark_todo_done"
+                    "web_search",
+                    "read_file",
+                    "write_file",
+                    "create_todo",
+                    "get_todo",
+                    "mark_todo_done",
                 ],
                 "context_files": ["AGENTS.md"],
                 "triggers": [
-                    "research", "find information", "search for",
-                    "investigate", "look up", "find out"
+                    "research",
+                    "find information",
+                    "search for",
+                    "investigate",
+                    "look up",
+                    "find out",
                 ],
-                "related": ["analyst"]
+                "related": ["analyst"],
             },
             "reviewer.yaml": {
                 "name": "reviewer",
@@ -152,15 +170,16 @@ Review checklist:
 3. Security considerations addressed
 4. Tests are adequate
 5. Documentation is clear""",
-                "tools": [
-                    "read_file", "list_dir", "git_status"
-                ],
+                "tools": ["read_file", "list_dir", "git_status"],
                 "context_files": ["AGENTS.md"],
                 "triggers": [
-                    "review code", "code review", "check quality",
-                    "audit", "inspect code"
+                    "review code",
+                    "code review",
+                    "check quality",
+                    "audit",
+                    "inspect code",
                 ],
-                "related": ["coder"]
+                "related": ["coder"],
             },
             "tester.yaml": {
                 "name": "tester",
@@ -178,24 +197,25 @@ Testing workflow:
 3. Write clear, focused tests
 4. Run tests and verify results
 5. Report coverage and issues""",
-                "tools": [
-                    "read_file", "write_file", "run_shell",
-                    "list_dir"
-                ],
+                "tools": ["read_file", "write_file", "run_shell", "list_dir"],
                 "context_files": ["AGENTS.md"],
                 "triggers": [
-                    "write tests", "test", "pytest", "unit test",
-                    "integration test", "test coverage"
+                    "write tests",
+                    "test",
+                    "pytest",
+                    "unit test",
+                    "integration test",
+                    "test coverage",
                 ],
-                "related": ["coder", "reviewer"]
+                "related": ["coder", "reviewer"],
             },
         }
-        
+
         for filename, data in default_subagents.items():
             file_path = SUBAGENTS_DIR / filename
             file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
             logger.info(f"Created default subagent: {filename}")
-    
+
     def _load_subagents(self):
         """Load subagents from YAML and Markdown files."""
         # Load YAML subagents
@@ -203,7 +223,7 @@ Testing workflow:
             try:
                 content = yaml_file.read_text(encoding="utf-8")
                 data = yaml.safe_load(content)
-                
+
                 subagent = Subagent(
                     name=data.get("name", yaml_file.stem),
                     description=data.get("description", ""),
@@ -215,15 +235,15 @@ Testing workflow:
                     related=data.get("related", []),
                     config=data.get("config", {}),
                     path=yaml_file,
-                    file_format="yaml"
+                    file_format="yaml",
                 )
-                
+
                 self.subagents[subagent.name] = subagent
                 logger.debug(f"Loaded subagent: {subagent.name} (yaml)")
-                
+
             except Exception as e:
                 logger.warning(f"Failed to load subagent from {yaml_file}: {e}")
-        
+
         # Load Markdown subagents (Anthropic-style)
         for md_file in SUBAGENTS_DIR.glob("*.md"):
             try:
@@ -232,40 +252,40 @@ Testing workflow:
                 if subagent:
                     self.subagents[subagent.name] = subagent
                     logger.debug(f"Loaded subagent: {subagent.name} (md)")
-                    
+
             except Exception as e:
                 logger.warning(f"Failed to load subagent from {md_file}: {e}")
-    
+
     def _parse_markdown_subagent(self, content: str, file_path: Path) -> Subagent | None:
         """Parse a Markdown subagent definition (Anthropic-style).
-        
+
         Expected format:
         ---
         name: code-simplifier
         description: Simplifies and refines code...
         model: default
         ---
-        
+
         [System prompt content...]
         """
         # Extract frontmatter
-        frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+        frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
         if not frontmatter_match:
             logger.warning(f"Invalid markdown subagent format: {file_path}")
             return None
-        
+
         frontmatter_text = frontmatter_match.group(1)
-        
+
         # Parse frontmatter as YAML
         frontmatter = yaml.safe_load(frontmatter_text)
-        
+
         if not frontmatter or "name" not in frontmatter:
             logger.warning(f"Missing name in frontmatter: {file_path}")
             return None
-        
+
         # Extract system prompt (everything after frontmatter)
-        system_prompt = content[frontmatter_match.end():].strip()
-        
+        system_prompt = content[frontmatter_match.end() :].strip()
+
         # Create subagent
         return Subagent(
             name=frontmatter.get("name", file_path.stem),
@@ -278,17 +298,17 @@ Testing workflow:
             related=frontmatter.get("related", []),
             config=frontmatter.get("config", {}),
             path=file_path,
-            file_format="md"
+            file_format="md",
         )
-    
+
     def get_subagent(self, name: str) -> Subagent | None:
         """Get a subagent by name."""
         return self.subagents.get(name)
-    
+
     def list_subagents(self) -> list[Subagent]:
         """List all available subagents."""
         return list(self.subagents.values())
-    
+
     def find_matching_subagent(self, task: str) -> Subagent | None:
         """Find the best matching subagent for a task."""
         for subagent in self.subagents.values():
@@ -304,93 +324,95 @@ registry = SubagentRegistry()
 @log_tool_call
 def list_subagents() -> str:
     """List all available subagents.
-    
+
     Returns:
         Formatted list of subagents with descriptions
     """
     subagents = registry.list_subagents()
-    
+
     if not subagents:
         return "No subagents available."
-    
+
     lines = [f"Available subagents ({len(subagents)}):"]
     for sa in sorted(subagents, key=lambda x: x.name):
         lines.append(f"\n🤖 {sa.name}")
         lines.append(f"   Description: {sa.description}")
         if sa.triggers:
             lines.append(f"   Triggers: {', '.join(sa.triggers[:5])}")
-    
+
     return "\n".join(lines)
 
 
 @log_tool_call
 def get_subagent(name: str) -> str:
     """Get details about a specific subagent.
-    
+
     Args:
         name: Subagent name
-        
+
     Returns:
         Subagent details including system prompt and configuration
     """
     subagent = registry.get_subagent(name)
-    
+
     if not subagent:
         available = [sa.name for sa in registry.list_subagents()]
         return f"Subagent '{name}' not found.\nAvailable: {', '.join(available)}"
-    
+
     lines = [
         f"## Subagent: {subagent.name}",
         f"Version: {subagent.version}",
         f"Format: {subagent.file_format}",
         f"Description: {subagent.description}",
-        f"\n### System Prompt",
-        f"{subagent.system_prompt[:2000]}..." if len(subagent.system_prompt) > 2000 else subagent.system_prompt,
+        "\n### System Prompt",
+        f"{subagent.system_prompt[:2000]}..."
+        if len(subagent.system_prompt) > 2000
+        else subagent.system_prompt,
     ]
-    
+
     if subagent.tools:
-        lines.append(f"\n### Tools")
+        lines.append("\n### Tools")
         lines.append(", ".join(subagent.tools))
-    
+
     if subagent.context_files:
-        lines.append(f"\n### Context Files")
+        lines.append("\n### Context Files")
         lines.append(", ".join(subagent.context_files))
-    
+
     if subagent.triggers:
-        lines.append(f"\n### Triggers")
+        lines.append("\n### Triggers")
         lines.append(", ".join(subagent.triggers))
-    
+
     if subagent.related:
-        lines.append(f"\n### Related Subagents")
+        lines.append("\n### Related Subagents")
         lines.append(", ".join(subagent.related))
-    
+
     return "\n".join(lines)
 
 
 @log_tool_call
 def delegate_task(subagent_name: str, task: str, context: str = "") -> str:
     """Delegate a task to a specific subagent.
-    
+
     Args:
         subagent_name: Name of the subagent to delegate to
         task: Task description to execute
         context: Additional context for the task
-        
+
     Returns:
         Result of subagent execution or error message
     """
     subagent = registry.get_subagent(subagent_name)
-    
+
     if not subagent:
         available = [sa.name for sa in registry.list_subagents()]
         return f"❌ Subagent '{subagent_name}' not found.\nAvailable: {', '.join(available)}"
-    
+
     # Build enhanced system prompt with context
     system_prompt = subagent.system_prompt
-    
+
     if context:
         system_prompt = f"{system_prompt}\n\n### Additional Context\n{context}"
-    
+
     # Add context files if specified
     if subagent.context_files:
         context_content = []
@@ -402,26 +424,15 @@ def delegate_task(subagent_name: str, task: str, context: str = "") -> str:
                     context_content.append(f"### {cf}\n{content[:3000]}")
                 except Exception as e:
                     logger.warning(f"Failed to read context file {cf}: {e}")
-        
+
         if context_content:
-            separator = '\n\n'.join(['=' * 80])
-            system_prompt = '\n\n'.join(context_content) + '\n\n' + separator + '\n\n' + system_prompt
-    
+            separator = "\n\n".join(["=" * 80])
+            system_prompt = (
+                "\n\n".join(context_content) + "\n\n" + separator + "\n\n" + system_prompt
+            )
+
     # Create task for subagent
-    subagent_task = f"""You are the {subagent.name} subagent. Execute the following task:
 
-### Task
-{task}
-
-### Instructions
-1. Analyze the task requirements
-2. Use your specialized tools and expertise
-3. Execute the task step by step
-4. Provide a clear summary of results
-
-Remember to follow your system prompt guidelines and best practices.
-"""
-    
     # Note: In a full implementation, this would spawn a subagent process
     # For now, return the prepared task information
     return f"""✅ Delegated task to subagent: {subagent.name}
@@ -443,33 +454,33 @@ The subagent would now execute this task with its specialized capabilities.
 In a full implementation, this would spawn a separate agent process.
 
 ### Available Tools
-{', '.join(subagent.tools) if subagent.tools else 'All standard tools'}
+{", ".join(subagent.tools) if subagent.tools else "All standard tools"}
 
 ### Related Subagents
-{', '.join(subagent.related) if subagent.related else 'None'}
+{", ".join(subagent.related) if subagent.related else "None"}
 """
 
 
 @log_tool_call
 def route_task(task: str) -> str:
     """Automatically route a task to the most appropriate subagent.
-    
+
     Args:
         task: Task description to analyze and route
-        
+
     Returns:
         Routing decision and delegated task result
     """
     # Find matching subagent
     matching = registry.find_matching_subagent(task)
-    
+
     if matching:
         return f"""🔄 Routing task to subagent: {matching.name}
 
 ### Task Analysis
 - **Task**: {task}
 - **Matched Subagent**: {matching.name}
-- **Reason**: Task matches triggers: {', '.join(matching.triggers[:3])}
+- **Reason**: Task matches triggers: {", ".join(matching.triggers[:3])}
 
 ### Delegation
 {delegate_task(matching.name, task)}
@@ -490,24 +501,25 @@ This task will be handled by the main agent. Consider creating a specialized sub
 
 
 @log_tool_call
-def create_subagent(name: str, description: str, system_prompt: str, 
-                   file_format: str = "md", **kwargs) -> str:
+def create_subagent(
+    name: str, description: str, system_prompt: str, file_format: str = "md", **kwargs
+) -> str:
     """Create a new subagent definition.
-    
+
     Args:
         name: Subagent name (unique identifier)
         description: Brief description of subagent purpose
         system_prompt: System prompt for the subagent
         file_format: "yaml" or "md" (default: "md")
         **kwargs: Additional configuration (tools, triggers, etc.)
-        
+
     Returns:
         Confirmation of subagent creation
     """
     # Check if subagent already exists
     if registry.get_subagent(name):
         return f"❌ Subagent '{name}' already exists."
-    
+
     # Create subagent file
     if file_format == "md":
         # Markdown format (Anthropic-style)
@@ -528,18 +540,18 @@ model: default
             "description": description,
             "version": "1.0.0",
             "system_prompt": system_prompt,
-            **kwargs
+            **kwargs,
         }
         file_path = SUBAGENTS_DIR / f"{name}.yaml"
         content = yaml.dump(data, default_flow_style=False)
-    
+
     # Write file
     file_path.write_text(content, encoding="utf-8")
-    
+
     # Reload registry
     registry._initialized = False
     registry.__init__()
-    
+
     return f"""✅ Created subagent: {name}
 
 ### Details

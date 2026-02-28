@@ -35,7 +35,7 @@ async def recall(
     """
     try:
         # Check if deps has memory methods (session mode)
-        if hasattr(ctx.deps, 'search_memory'):
+        if hasattr(ctx.deps, "search_memory"):
             entries = await ctx.deps.search_memory(query, category=category)
 
             if not entries:
@@ -98,7 +98,7 @@ async def remember(
 
     try:
         # Check if deps has memory methods (session mode)
-        if hasattr(ctx.deps, 'save_memory'):
+        if hasattr(ctx.deps, "save_memory"):
             await ctx.deps.save_memory(
                 key=key,
                 category=category,

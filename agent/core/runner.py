@@ -1,4 +1,4 @@
-'''Agent task runner with session support and self-healing retries.
+"""Agent task runner with session support and self-healing retries.
 
 This module provides the main entry points for running agent tasks
 with SQLite session persistence (OpenClaw-inspired architecture) and
@@ -14,7 +14,7 @@ Progress tracking:
 - Real-time TODO updates
 - Progress notifications to Telegram/CLI
 - Step-by-step activity reporting
-'''
+"""
 
 from __future__ import annotations
 
@@ -22,13 +22,11 @@ import logging
 
 from agent.config import MAX_RETRIES, PROVIDER_DEFAULT, VERSION
 from agent.dependencies import AgentDeps
-from agent.session_globals import close_db
 from agent.healing import (
-    SelfHealingRunner,
-    ErrorClassifier,
     FallbackHandler,
+    SelfHealingRunner,
 )
-from agent.progress import get_tracker, ProgressState
+from agent.progress import get_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +43,7 @@ def _build_repair_goal(
     """Build goal for a resumable auto-repair task with full error context."""
     partial = (partial_output or "").strip()
     if len(partial) > _MAX_REPAIR_PARTIAL_LEN:
-        partial = partial[: _MAX_REPAIR_PARTIAL_LEN] + "\n... [truncated]"
+        partial = partial[:_MAX_REPAIR_PARTIAL_LEN] + "\n... [truncated]"
     return (
         f"{AUTO_REPAIR_TASK_PREFIX} The previous run failed after {attempt_count} attempt(s). "
         "Fix the cause and complete the original task. Use get_todo if needed, then reply with the result.\n\n"
@@ -78,7 +76,7 @@ async def run_with_retry(
     - Context compression for overflow errors
     - Graceful fallback generation
     - Smart retry counting (non-retryable errors don't waste attempts)
-    
+
     Args:
         task: Initial task description.
         max_retries: Override config (default: MAX_RETRIES from config).
@@ -123,13 +121,13 @@ async def run_with_retry(
     healing_runner = SelfHealingRunner(max_retries=n)
 
     # Initialize progress tracker
-    is_cli = (chat_id == 0)
+    is_cli = chat_id == 0
     tracker = get_tracker(chat_id=chat_id, is_cli=is_cli)
-    
+
     try:
         # Start progress tracking
         await tracker.start_task(task)
-        
+
         # Run with self-healing
         result, success = await healing_runner.run(
             agent=agent,
@@ -145,10 +143,10 @@ async def run_with_retry(
             await deps.add_assistant_message(output_text)
             if resumable_task_id is not None:
                 await deps.db.mark_resumable_task_completed(resumable_task_id)
-            
+
             # Mark progress as complete
             await tracker.complete("Task completed successfully")
-            
+
             logger.info("Task completed successfully")
             return output_text
         else:
@@ -161,11 +159,13 @@ async def run_with_retry(
                 output_text = str(result)
             await deps.add_assistant_message(output_text)
             if resumable_task_id is not None:
-                await deps.db.mark_resumable_task_failed(resumable_task_id, "Fallback after retries")
-            
+                await deps.db.mark_resumable_task_failed(
+                    resumable_task_id, "Fallback after retries"
+                )
+
             # Mark progress as failed
             await tracker.fail("Fallback after retries")
-            
+
             if _should_create_repair_task(task, deps):
                 last_err = getattr(deps, "last_error", None) or "Fallback after retries"
                 attempt_count = getattr(deps, "retry_count", None) or n
@@ -176,17 +176,19 @@ async def run_with_retry(
     except Exception as e:
         # Last-resort error handling
         logger.error(f"Unexpected error in runner: {e}")
-        
+
         # Mark progress as failed
         await tracker.fail(str(e))
-        
+
         if resumable_task_id is not None and deps is not None:
             await deps.db.mark_resumable_task_failed(resumable_task_id, str(e))
         if _should_create_repair_task(task, deps):
             attempt_count = getattr(deps, "retry_count", None) or 1
             repair_goal = _build_repair_goal(task, str(e), None, attempt_count)
             await deps.db.upsert_resumable_task(deps.session_id, deps.chat_id, repair_goal)
-            logger.info("Created auto-repair resumable task for chat_id=%s after exception", deps.chat_id)
+            logger.info(
+                "Created auto-repair resumable task for chat_id=%s after exception", deps.chat_id
+            )
         fallback = FallbackHandler()
         return fallback.generate_from_error(e, attempt_count=1)
 
@@ -223,27 +225,29 @@ async def run_task_with_session(
     )
 
 
-async def run_simple_task(task: str, model_name: str | None = None, provider: str | None = None) -> str:
+async def run_simple_task(
+    task: str, model_name: str | None = None, provider: str | None = None
+) -> str:
     """Run a simple task without session persistence.
-    
+
     Useful for one‑off tasks that don't need session isolation
     or memory persistence.
-    
+
     Args:
         task: Task description
         model_name: Model name override
         provider: 'vllm' or 'openrouter'
-        
+
     Returns:
         Agent output as string
     """
     from agent.core.agent import build_simple_agent
-    
+
     agent = build_simple_agent(provider=provider)
-    
+
     # Initialize progress tracker for CLI
     tracker = get_tracker(chat_id=0, is_cli=True)
-    
+
     try:
         await tracker.start_task(task)
         result = await agent.run(task)
