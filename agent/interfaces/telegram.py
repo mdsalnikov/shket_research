@@ -484,8 +484,57 @@ def _log_bot_error(exc: BaseException) -> None:
 application: ApplicationBuilder | None = None
 
 
+async def _run_task_in_background(
+    chat_id: int,
+    user_id: int,
+    username: str | None,
+    task_text: str,
+    task_id: int,
+) -> None:
+    """Run task under chat lock and send result via bot. Does not block the message handler."""
+    lock = _get_chat_lock(chat_id)
+    _chat_queued_count[chat_id] = _chat_queued_count.get(chat_id, 0) + 1
+    try:
+        async with lock:
+            if application is None:
+                return
+            bot = application.bot
+            queued = _chat_queued_count.get(chat_id, 0)
+            _chat_queued_count[chat_id] = 0
+            if queued > 1:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏳ Task queued ({queued - 1} ahead)",
+                    parse_mode="Markdown",
+                )
+
+            log_task_start(chat_id, task_text)
+            start_time = time.time()
+            try:
+                from agent.core.runner import run_task_with_session
+
+                result = await run_task_with_session(
+                    task_text,
+                    chat_id=chat_id,
+                    username=username,
+                    user_id=user_id,
+                    provider=_current_provider,
+                )
+                await _send_long_to_chat(bot, chat_id, result)
+                duration = time.time() - start_time
+                log_task_end(chat_id, True, duration)
+            except Exception as e:
+                duration = time.time() - start_time
+                error_msg = f"❌ Error: {str(e)}"
+                await bot.send_message(chat_id=chat_id, text=error_msg, parse_mode="Markdown")
+                log_task_end(chat_id, False, duration, error=str(e))
+                logger.exception("Task failed for chat_id=%s", chat_id)
+    finally:
+        _active_tasks.pop(task_id, None)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages as tasks."""
+    """Handle incoming text messages as tasks. Returns immediately; task runs in background."""
     global _task_counter
 
     user = update.effective_user
@@ -501,66 +550,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     task_text = update.message.text
 
-    # Configure progress tracker for this chat
     tracker = get_tracker(chat_id=chat_id, is_cli=False)
     tracker.telegram_callback = _send_progress_update
 
-    # Create task info
     _task_counter += 1
     my_task_id = _task_counter
-    task_info = TaskInfo(
+    _active_tasks[my_task_id] = TaskInfo(
         task_text=task_text,
         chat_id=chat_id,
         username=username,
         user_id=user.id,
         provider=_current_provider,
     )
-    _active_tasks[my_task_id] = task_info
 
-    # Acquire chat lock
-    lock = _get_chat_lock(chat_id)
-
-    # Check queue
-    if _chat_queued_count.get(chat_id, 0) > 0:
-        await update.message.reply_text(
-            f"⏳ Task queued ({_chat_queued_count[chat_id]} ahead)", parse_mode="Markdown"
+    asyncio.create_task(
+        _run_task_in_background(
+            chat_id=chat_id,
+            user_id=user.id,
+            username=username,
+            task_text=task_text,
+            task_id=my_task_id,
         )
-
-    async with lock:
-        _chat_queued_count[chat_id] = 0
-
-        # Log task start
-        log_task_start(chat_id, task_text)
-        start_time = time.time()
-
-        try:
-            # Run task with session
-            from agent.core.runner import run_task_with_session
-
-            result = await run_task_with_session(
-                task_text,
-                chat_id=chat_id,
-                username=username,
-                user_id=user.id,
-                provider=_current_provider,
-            )
-
-            # Send result
-            await _send_long_message(update.message, result)
-
-            duration = time.time() - start_time
-            log_task_end(chat_id, True, duration)
-
-        except Exception as e:
-            duration = time.time() - start_time
-            error_msg = f"❌ Error: {str(e)}"
-            await update.message.reply_text(error_msg, parse_mode="Markdown")
-
-            log_task_end(chat_id, False, duration, error=str(e))
-            logger.exception("Task failed for chat_id=%s", chat_id)
-
-    # Clean up
-    del _active_tasks[my_task_id]
+    )
 
 
 def run_bot() -> None:
@@ -573,8 +584,13 @@ def run_bot() -> None:
 
     setup_logging()
 
-    # Create application
-    application = ApplicationBuilder().token(TG_BOT_KEY).build()
+    # Create application; allow concurrent updates so /status, /help, etc. work while a task runs
+    application = (
+        ApplicationBuilder()
+        .token(TG_BOT_KEY)
+        .concurrent_updates(10)
+        .build()
+    )
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
