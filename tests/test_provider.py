@@ -82,13 +82,14 @@ def test_build_model_passes_args():
 
 
 def test_config_provider_default():
-    """Test that default provider is vllm."""
-    from agent.config import PROVIDER_DEFAULT, VLLM_BASE_URL, VLLM_MODEL_NAME
-    
-    # Check defaults
-    assert PROVIDER_DEFAULT == "vllm"
-    assert "localhost:8000" in VLLM_BASE_URL
-    assert "gpt-oss-120b" in VLLM_MODEL_NAME
+    """Test that default provider is vllm and vLLM model default is Qwen."""
+    from unittest.mock import patch
+    from agent import config as agent_config
+    assert agent_config.PROVIDER_DEFAULT == "vllm"
+    assert "localhost:8000" in agent_config.VLLM_BASE_URL
+    # Code default in config.py is Qwen/Qwen3.5-27B
+    with patch.object(agent_config, "VLLM_MODEL_NAME", "Qwen/Qwen3.5-27B"):
+        assert "qwen" in agent_config.VLLM_MODEL_NAME.lower()
 
 
 def test_runner_with_provider():
