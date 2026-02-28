@@ -2,7 +2,7 @@
 
 This package contains all tool implementations for the Shket Research Agent.
 Tools are categorized into:
-- Core tools: shell, filesystem, web search
+- Core tools: shell, filesystem, web search, browser
 - Development tools: git, gh CLI, testing
 - Agent tools: todo, backup, memory, self-test
 - Context tools: agents_md (AGENTS.md parser), skills (skills system)
@@ -13,6 +13,16 @@ Tools are categorized into:
 from agent.tools.shell import run_shell
 from agent.tools.filesystem import read_file, write_file, list_dir
 from agent.tools.web import web_search
+from agent.tools.browser import (
+    browser_navigate,
+    browser_screenshot,
+    browser_get_text,
+    browser_click,
+    browser_fill,
+    browser_get_html,
+    browser_get_url,
+    browser_refresh,
+)
 from agent.tools.todo import create_todo, get_todo, mark_todo_done
 from agent.tools.memory import recall, remember
 from agent.tools.git import git_status, git_add, git_commit, git_push, git_pull, git_checkout
@@ -38,6 +48,16 @@ __all__ = [
     "write_file",
     "list_dir",
     "web_search",
+    
+    # Browser tools
+    "browser_navigate",
+    "browser_screenshot",
+    "browser_get_text",
+    "browser_click",
+    "browser_fill",
+    "browser_get_html",
+    "browser_get_url",
+    "browser_refresh",
     
     # Todo tools
     "create_todo",
