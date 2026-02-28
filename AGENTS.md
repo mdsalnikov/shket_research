@@ -275,187 +275,321 @@ Skills provide domain expertise and task patterns. Located in `skills/` director
 ### Available Categories
 
 - **programming**: Python, JavaScript, and other programming skills
-- **development**: Git, code review, testing
-- **research**: Web research, literature review
-- **devops**: Deployment, CI/CD, infrastructure
+- **development**: Git, code review, and development workflows
+- **research**: Web research, data analysis, and literature review
+- **devops**: Deployment, CI/CD, and infrastructure
 
 ### Using Skills
 
 ```python
-# Find relevant skills for a task
-find_relevant_skills("write a python script")
+# List all skills
+await list_skills()
+
+# Get skills by category
+await list_skills("programming")
 
 # Get specific skill
-get_skill("python")
+await get_skill("python")
 
-# List all skills
-list_skills()
+# Find relevant skills for a task
+await find_relevant_skills("write a python script")
 
-# List skills by category
-list_skills("programming")
+# Create a new skill
+await create_skill(
+    name="my_skill",
+    category="custom",
+    content="# My Skill\n\nSkill content..."
+)
+```
+
+### Skill Format
+
+```markdown
+# Skill Name
+
+## Description
+Brief description of what this skill covers.
+
+## When to Use
+- Use case 1
+- Use case 2
+- Use case 3
+
+## Tools
+- Tool 1: Description
+- Tool 2: Description
+
+## Patterns
+Common patterns and best practices.
+
+## Related Skills
+- related_skill_1
+- related_skill_2
 ```
 
 ---
 
-## Subagents
+## Subagents System
 
-Subagents are specialized agents for specific tasks. Located in `subagents/` directory.
+Subagents are specialized agents that handle specific types of tasks.
 
 ### Available Subagents
 
-| Subagent | Purpose |
-|----------|---------|
-| `coder` | Code generation and modification |
-| `researcher` | Information gathering and research |
-| `reviewer` | Code review and quality assurance |
-| `tester` | Test creation and execution |
+- **coder**: Code generation and modification
+- **researcher**: Information gathering and research
+- **reviewer**: Code review and quality assurance
+- **tester**: Test creation and execution
 
 ### Using Subagents
 
 ```python
-# List subagents
-list_subagents()
+# List all subagents
+await list_subagents()
 
-# Get subagent details
-get_subagent("coder")
+# Get specific subagent
+await get_subagent("coder")
 
-# Delegate task to specific subagent
-delegate_task("coder", "write a function")
+# Delegate task to subagent
+await delegate_task("coder", "write a function")
 
 # Auto-route task to appropriate subagent
-route_task("research this topic")
+await route_task("write a python script")
+
+# Create a new subagent
+await create_subagent(
+    name="my_agent",
+    description="Custom agent",
+    tools=["read_file", "write_file"],
+    triggers=["custom", "trigger"],
+    system_prompt="You are a custom agent..."
+)
+```
+
+### Subagent Format (YAML)
+
+```yaml
+name: agent_name
+description: Brief description
+version: 1.0.0
+system_prompt: |
+  You are a specialized agent. Focus on...
+tools:
+  - tool1
+  - tool2
+context_files:
+  - AGENTS.md
+  - README.md
+triggers:
+  - trigger1
+  - trigger2
+related:
+  - related_agent
 ```
 
 ---
 
-## Deep Research
+## Deep Research System
 
 Advanced multi-step research capabilities.
 
-### Features
+### Tools
 
-- **Multi-step planning**: Automatic research plan generation
-- **Iterative refinement**: Follow-up searches based on findings
-- **Source verification**: Cross-reference information
-- **Synthesis**: Combine findings into coherent reports
+- **deep_research**: Full multi-step research with synthesis
+- **quick_research**: Single-step quick lookup
+- **compare_sources**: Compare information across sources
 
-### Usage
+### Using Deep Research
 
 ```python
 # Full deep research
-deep_research(
-    "machine learning trends 2024",
-    goals=["find latest developments", "identify key players"],
+await deep_research(
+    "machine learning in healthcare",
+    goals=["find advances", "identify challenges"],
     max_steps=10,
     max_depth=3
 )
 
 # Quick research
-quick_research("python async await")
+await quick_research("python best practices")
 
 # Compare sources
-compare_sources("react vs vue")
+await compare_sources("React vs Vue")
 ```
+
+### Research Workflow
+
+1. **Plan**: Create research plan based on topic and goals
+2. **Search**: Execute multi-step searches with refinement
+3. **Verify**: Cross-reference findings across sources
+4. **Synthesize**: Group findings by theme
+5. **Report**: Generate structured report with confidence scores
 
 ---
 
-## Self-Healing
+## Self-Healing System
 
-The agent includes robust error recovery:
-
-1. **Error Classification**: Distinguishes recoverable vs fatal errors
-2. **Context Compression**: Reduces context for overflow errors
-3. **Fallback Generation**: Creates meaningful responses from partial results
-4. **Smart Retries**: Non-retryable errors don't waste attempts
+The agent can recover from errors and continue operation.
 
 ### Error Types
 
-- **RECOVERABLE**: Can retry with adjusted approach
-- **CONTEXT_OVERFLOW**: Need to compress context before retry
-- **RATE_LIMIT**: Wait and retry (backoff)
-- **NETWORK_ERROR**: Retry with exponential backoff
-- **TIMEOUT**: Retry with exponential backoff
-- **USAGE_LIMIT**: Account/quota limit - cannot retry
-- **AUTH_ERROR**: Authentication error - cannot retry
-- **FATAL**: Cannot recover, need fallback response
+- **Context Overflow**: Compress history and continue
+- **Usage Limit**: Generate fallback response
+- **Rate Limit**: Wait and retry
+- **Auth Error**: Abort with clear message
+- **Recoverable**: Retry with exponential backoff
+
+### Healing Strategies
+
+1. **Classifier**: Categorize error type
+2. **Compressor**: Reduce context size if needed
+3. **Fallback**: Generate helpful response for non-recoverable errors
+4. **Strategies**: Determine action based on error type
 
 ---
 
-## Memory
+## Memory System
 
-L0/L1/L2 memory hierarchy:
+Long-term memory with L0/L1/L2 hierarchy.
 
-- **L0**: Quick abstract (one-line summary)
-- **L1**: Category overview (2-3 sentences)
-- **L2**: Full details (complete information)
+### Memory Levels
 
-Categories: System, Environment, Skill, Project, Comm, Security
+- **L0 (Abstract)**: One-line summary
+- **L1 (Overview)**: 2-3 sentence overview
+- **L2 (Details)**: Full detailed information
+
+### Using Memory
+
+```python
+# Save to memory
+await remember(
+    key="project_status",
+    category="Project",
+    abstract="Project is in development",
+    overview="Active development with regular updates",
+    details="Full details about the project..."
+)
+
+# Recall from memory
+await recall(query="project status")
+await recall(query="API config", category="System")
+```
+
+### Categories
+
+- **System**: System configuration and settings
+- **Environment**: Environment-specific information
+- **Skill**: Skills and capabilities
+- **Project**: Project-specific information
+- **Comm**: Communication preferences
+- **Security**: Security-related information
+
+---
+
+## Session Management
+
+SQLite-based session persistence with per-chat isolation.
+
+### Features
+
+- Isolated session state per chat
+- SQLite database for persistence
+- OpenClaw-inspired architecture
+- Automatic session cleanup
+
+---
+
+## Git and GitHub Integration
+
+Full version control support with GitHub CLI.
+
+### Git Operations
+
+```bash
+git_status    # Check repository status
+git_add       # Stage files
+git_commit    # Create commit
+git_push      # Push to remote
+git_pull      # Pull from remote
+git_checkout  # Switch branches
+```
+
+### GitHub CLI
+
+```python
+# Create PR
+await run_gh("pr create --title '...' --body '...'")
+
+# View PR
+await run_gh("pr view")
+
+# List PRs
+await run_gh("pr list")
+```
 
 ---
 
 ## Self-Modification Protocol
 
-When modifying yourself, follow this protocol:
+When modifying agent code, follow this protocol:
 
-### PHASE 1 — PREPARE
+### Phase 1 — Prepare
 
-1. `backup_codebase()` — Create full backup
-2. Read current files with `read_file`
-3. Create branch for non-trivial changes
+1. **backup_codebase()** — Create full backup
+2. **Read current files** — Understand code to change
+3. **Branch** — Create branch for non-trivial changes
 
-### PHASE 2 — EDIT & VERIFY
+### Phase 2 — Edit & Verify
 
-4. Make changes with `write_file`
-5. Update VERSION file
-6. Run `run_tests()`
-7. Run `run_agent_subprocess("run status")`
+4. **Make changes** — Use write_file for modifications
+5. **Update VERSION** — Bump version number
+6. **run_tests()** — Run test suite
+7. **run_agent_subprocess()** — Test in fresh subprocess
 
-### PHASE 3A — SMALL FIX
+### Phase 3 — Deploy
 
-- Commit to main: `git_add(["."])`, `git_commit()`, `git_push()`
+**Small Fix**: Commit to main, push, restart
 
-### PHASE 3B — LARGER CHANGE
+**Large Change**: Create PR, do not merge yourself
 
-- Create PR: `run_gh("pr create --title '...' --body '...'")`
-- Do NOT merge yourself
-- Wait for user review
+### Rollback
 
----
-
-## Rules
-
-1. Always use tools when the task requires OS, file, or web interaction
-2. Prefer simple shell one-liners; avoid interactive commands
-3. Write scripts to files, then execute with `run_shell`
-4. For research: use `web_search` for simple, `deep_research` for complex
-5. Be concise and precise in final answers
-6. Always test scripts after writing them
-7. Use `create_todo` for multi-step tasks
-8. Never skip `backup_codebase()` before self-modification
-9. Never push before tests pass
-10. Never merge PRs yourself unless explicitly asked
+Use `restore_from_backup(backup_dir)` if anything fails.
 
 ---
 
-## Security Considerations
+## Best Practices
 
-### API Keys
+### For Agents
 
-- Never commit API keys to the repository
-- Use `.env` file for local development
-- Use environment variables in production
+1. Always read AGENTS.md at the start of complex tasks
+2. Use `find_relevant_skills` to discover domain expertise
+3. Use `route_task` to delegate to specialized subagents
+4. Use `create_todo` for multi-step tasks
+5. Always test code changes before committing
 
-### Shell Commands
+### For Developers
 
-- Shell commands are executed with 30s timeout
-- No sudo/root privileges
-- Sanitize user input before shell execution
+1. Write tests for all new features
+2. Follow the self-modification protocol
+3. Keep commits small and atomic
+4. Use meaningful commit messages
+5. Update documentation when changing behavior
 
-### File Operations
+---
 
-- File operations limited to project directory
-- No execution of arbitrary files
-- Backup before self-modification
+## Troubleshooting
+
+### Common Issues
+
+**Agent not responding**: Check provider configuration and API keys
+
+**Tests failing**: Run `pytest tests/test_cli.py -v` to isolate issue
+
+**Self-modification failed**: Use `restore_from_backup` to rollback
+
+**Subagent not routing correctly**: Check trigger patterns in YAML
+
+**Skills not loading**: Ensure skills are in correct directory structure
 
 ---
 
@@ -463,12 +597,13 @@ When modifying yourself, follow this protocol:
 
 1. Fork the repository
 2. Create a feature branch
-3. Make changes and run tests
-4. Create a pull request
-5. Wait for review
+3. Make changes and write tests
+4. Run full test suite
+5. Create a pull request
+6. Wait for review and merge
 
 ---
 
 ## License
 
-MIT License
+MIT License - see LICENSE file for details.
