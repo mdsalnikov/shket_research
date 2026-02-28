@@ -40,7 +40,14 @@ from agent.tools.subagents import (
     create_subagent,
 )
 from agent.tools.deep_research import deep_research, quick_research, compare_sources
-from agent.tools.self_test import backup_codebase, list_backups, restore_from_backup, run_tests, run_agent_subprocess
+from agent.tools.self_test import (
+    backup_codebase,
+    get_recent_bot_errors,
+    list_backups,
+    restore_from_backup,
+    run_tests,
+    run_agent_subprocess,
+)
 
 __all__ = [
     # Core tools
@@ -108,6 +115,7 @@ __all__ = [
     
     # Self-test and backup tools
     "backup_codebase",
+    "get_recent_bot_errors",
     "list_backups",
     "restore_from_backup",
     "run_tests",
@@ -186,6 +194,7 @@ def register_tools(agent: Agent) -> None:
     
     # Self-test and backup tools (no context needed)
     agent.tool_plain(backup_codebase)
+    agent.tool_plain(get_recent_bot_errors)
     agent.tool_plain(list_backups)
     agent.tool_plain(restore_from_backup)
     agent.tool_plain(run_tests)

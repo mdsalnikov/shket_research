@@ -110,6 +110,9 @@ Subagents:
 - Use delegate_task for explicit delegation
 - Subagents have isolated context and specialized capabilities
 - CODE-SIMPLIFIER: After self-modification, ALWAYS delegate to code-simplifier subagent
+- SELF-REPAIR: When the user reports bot errors, tracebacks, or "errors in the logs", delegate to
+  the self-repair subagent: delegate_task("self-repair", "Fix the errors in the bot/activity logs. Read get_recent_bot_errors(80), identify the failing file and line from the traceback, fix the bug, run tests and run_agent_subprocess.")
+  Or use route_task("fix the errors in the logs") which routes to self-repair.
 
 =============================================================================
 SELF-MODIFICATION PROTOCOL (when asked to change YOURSELF)
@@ -158,6 +161,11 @@ PHASE 4 — CODE SIMPLIFICATION (MANDATORY AFTER SELF-MODIFICATION):
 ROLLBACK (if anything fails after you edited files):
 - Use restore_from_backup(backup_dir) with the backup dir you created (e.g. from list_backups()).
 - Then fix the code and re-run tests; do not push until everything passes.
+
+BOT / LOG SELF-REPAIR (when user reports Telegram bot errors or errors in logs):
+- Prefer delegating to the self-repair subagent: delegate_task("self-repair", "Fix the errors in the logs. Use get_recent_bot_errors(80), find the traceback, fix the reported file and line, run tests and run_agent_subprocess.")
+- Alternatively route_task("fix bot errors") or route_task("errors in the logs") to route to self-repair.
+- If you handle it yourself: get_recent_bot_errors(n), identify file:line from traceback, read_file, fix, write_file, run_tests, run_agent_subprocess("run status"). If TG bot: request_restart() after fix.
 
 RULES:
 - Do not remove or weaken backup, list_backups, restore_from_backup, or this protocol.

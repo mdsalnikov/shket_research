@@ -16,7 +16,7 @@ import functools
 from datetime import datetime
 from typing import Callable, Any
 
-from agent.config import PROJECT_ROOT
+from agent.config import PROJECT_ROOT, BOT_ERRORS_LOG
 
 ACTIVITY_LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "activity.log")
 
@@ -102,19 +102,15 @@ class ToolCallLogger:
             f.write(f"{_timestamp()} | ✅ {self.tool_name} → {_truncate(result, 3000)} ({duration:.2f}s)\n")
 
 
-def log_tool_call(tool_name: str | None = None):
-    """Decorator for logging tool calls with timing.
-    
-    Usage:
-        @log_tool_call
-        def my_tool(arg1, arg2):
-            ...
-        
-        # Or with custom name:
-        @log_tool_call("custom_name")
-        def my_tool(arg1, arg2):
-            ...
+def log_tool_call(tool_name: str | None = None, context: str | None = None):
+    """Decorator or context manager for logging tool calls with timing.
+
+    Context manager: with log_tool_call("tool_name", "param detail") as tool_log:
+    Decorator: @log_tool_call or @log_tool_call("custom_name")
     """
+    if context is not None:
+        return ToolCallLogger(tool_name or "tool", context)
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> Any:
@@ -150,7 +146,23 @@ def log_tool_call(tool_name: str | None = None):
         func = tool_name
         tool_name = None
         return decorator(func)
-    
+
+    # Single string arg: support both "with log_tool_call('name')" and "@log_tool_call('name')"
+    if tool_name is not None:
+
+        class _Dual:
+            def __enter__(self):
+                self._logger = ToolCallLogger(tool_name, None)
+                return self._logger.__enter__()
+
+            def __exit__(self, *args):
+                return self._logger.__exit__(*args)
+
+            def __call__(self, func: Callable) -> Callable:
+                return decorator(func)
+
+        return _Dual()
+
     return decorator
 
 
@@ -171,3 +183,15 @@ def get_activity_log_tail(n: int = 50) -> str:
     tail = lines[-n:] if len(lines) > n else lines
     header = f"📝 Last {len(tail)} of {len(lines)} entries:\n\n"
     return header + "".join(tail)
+
+
+def get_bot_errors_tail(n: int = 50) -> str:
+    """Get last n lines of Telegram bot error log (for self-repair)."""
+    try:
+        with open(BOT_ERRORS_LOG, encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return "No bot errors logged yet."
+
+    tail = lines[-n:] if len(lines) > n else lines
+    return "".join(tail)

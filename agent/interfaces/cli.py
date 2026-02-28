@@ -242,6 +242,7 @@ def main():
     sub.add_parser("clear", help="Clear session context")
     sub.add_parser("context", help="Show session context")
     sub.add_parser("resume", help="Resume incomplete task")
+    sub.add_parser("bot", help="Start Telegram bot")
     
     long_parser = sub.add_parser("long", help="Long-running commands")
     long_sub = long_parser.add_subparsers(dest="long_cmd")
@@ -253,6 +254,10 @@ def main():
 
     logs_parser = sub.add_parser("logs", help="Show log tail")
     logs_parser.add_argument("n", type=int, nargs="?", default=30, help="Number of lines")
+
+    repair_parser = sub.add_parser("self-repair-check", help="Check logs and run self-repair (cron: merge PR, restart)")
+    repair_parser.add_argument("--dry-run", action="store_true", help="Only run agent, do not merge PR or restart")
+    repair_parser.add_argument("--provider", choices=["vllm", "openrouter"], help="LLM provider")
 
     args = parser.parse_args()
 
@@ -276,6 +281,9 @@ def main():
         asyncio.run(_show_context())
     elif args.command == "resume":
         asyncio.run(_resume_task())
+    elif args.command == "bot":
+        from agent.interfaces.telegram import run_bot
+        run_bot()
     elif args.command == "long":
         if args.long_cmd == "list":
             asyncio.run(_long_list(chat_id=args.chat_id, limit=args.limit))
@@ -285,5 +293,8 @@ def main():
             long_parser.print_help()
     elif args.command == "logs":
         _show_logs(args.n)
+    elif args.command == "self-repair-check":
+        from agent.self_repair_cron import run_self_repair_check
+        exit(run_self_repair_check(dry_run=args.dry_run, provider=args.provider))
     else:
         parser.print_help()
