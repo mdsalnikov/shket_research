@@ -27,38 +27,42 @@ _start_time = time.time()
 # Current provider for bot sessions (can be changed via /provider command)
 _current_provider: Literal["vllm", "openrouter"] = PROVIDER_DEFAULT
 
+# Grouped for menu: main, tasks, session, logs, emergency
 BOT_COMMANDS = [
-    BotCommand("start", "Запустить бота / показать приветствие"),
-    BotCommand("help", "Список доступных команд"),
-    BotCommand("status", "Показать статус агента и время работы"),
-    BotCommand("provider", "Переключить LLM провайдера (vllm/openrouter)"),
-    BotCommand("context", "Показать информацию о контексте сессии"),
+    BotCommand("start", "Приветствие"),
+    BotCommand("help", "Справка по командам (группы)"),
+    BotCommand("status", "Статус агента и uptime"),
+    BotCommand("tasks", "Запущенные задачи и очередь"),
+    BotCommand("long", "Запустить long-задачу (возобновляется после рестарта)"),
+    BotCommand("longlist", "Список long-задач этого чата (running/completed/failed)"),
+    BotCommand("provider", "Провайдер LLM (vllm/openrouter)"),
+    BotCommand("context", "Контекст сессии (сообщения, токены)"),
     BotCommand("clear", "Очистить контекст сессии"),
-    BotCommand("tasks", "Список запущенных задач"),
-    BotCommand("logs", "Показать последние N записей лога (по умолчанию 30)"),
-    BotCommand("exportlogs", "Скачать полный файл лога"),
-    BotCommand("panic", "Экстренная остановка — завершить все процессы агента"),
+    BotCommand("logs", "Последние N записей лога"),
+    BotCommand("exportlogs", "Скачать полный лог"),
+    BotCommand("panic", "Экстренная остановка"),
 ]
 
 HELP_TEXT = (
     "🤖 *Shket Research Agent*\n\n"
-    "*Команды:*\n"
-    "/start — приветственное сообщение\n"
-    "/help — это справка\n"
-    "/status — статус агента и время работы\n"
-    "/provider — переключить провайдера (vllm/openrouter)\n"
-    "/context — информация о контексте (сообщения, токены)\n"
-    "/clear — очистить контекст сессии\n"
-    "/tasks — список запущенных задач\n"
-    r"/logs \[N] — показать последние N записей лога (по умолчанию 30)" + "\n"
-    "/exportlogs — скачать полный файл лога\n"
-    "/panic — экстренная остановка\n\n"
-    "Отправьте любой текстовое сообщение, чтобы дать агенту задачу.\n"
-    "Несколько задач могут выполняться одновременно — бот остаётся отзывчивым.\n\n"
-    "*Доступные инструменты:*\n"
-    "🐚 Shell, 📁 Filesystem, 🌐 Web search\n"
-    "📋 TODO, 🔄 Backup & self-test, 📦 Git (commit/push), 🔁 Restart\n"
-    "🧠 Memory (remember/recall)"
+    "*Основные:*\n"
+    "/start — приветствие\n"
+    "/help — эта справка\n"
+    "/status — статус агента, uptime, resumable\n\n"
+    "*Задачи:*\n"
+    "/tasks — запущенные задачи и очередь по чатам\n"
+    "/long _цель_ — long‑задача (переживёт рестарт бота)\n"
+    "/longlist — список long‑задач этого чата (running/completed/failed)\n\n"
+    "*Сессия:*\n"
+    "/provider — vllm | openrouter\n"
+    "/context — сообщения, токены\n"
+    "/clear — очистить контекст\n\n"
+    "*Логи:*\n"
+    r"/logs \[N] — последние N строк (по умолчанию 30)" + "\n"
+    "/exportlogs — скачать лог\n\n"
+    "*Экстренно:* /panic\n\n"
+    "Любое текстовое сообщение — задача агенту. Несколько задач параллельно.\n\n"
+    "*Инструменты:* Shell, Filesystem, Web, TODO, Backup, Git, Memory"
     f"\n\nВерсия: {VERSION}"
 )
 
@@ -93,6 +97,8 @@ def _is_user_allowed(username: str | None) -> bool:
     return username.lower() in TG_WHITELIST
 
 
+MAX_RESUME_COUNT = 5
+
 async def _send_long_message(message, text: str) -> None:
     """Send text in chunks so each message stays under Telegram's 4096 limit."""
     text = str(text) if not isinstance(text, str) else text
@@ -105,6 +111,21 @@ async def _send_long_message(message, text: str) -> None:
         if last_nl != -1:
             chunk = chunk[: last_nl + 1]
         await message.reply_text(chunk)
+        text = text[len(chunk) :]
+
+
+async def _send_long_to_chat(bot, chat_id: int, text: str) -> None:
+    """Send long text to chat in chunks (for resume when no message object)."""
+    text = str(text) if not isinstance(text, str) else text
+    while text:
+        if len(text) <= MAX_MESSAGE_LENGTH:
+            await bot.send_message(chat_id=chat_id, text=text)
+            return
+        chunk = text[:MAX_MESSAGE_LENGTH]
+        last_nl = chunk.rfind("\n")
+        if last_nl != -1:
+            chunk = chunk[: last_nl + 1]
+        await bot.send_message(chat_id=chat_id, text=chunk)
         text = text[len(chunk) :]
 
 
@@ -171,13 +192,21 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     m, s = divmod(rem, 60)
     running = len(_active_tasks)
     queued = sum(_chat_queued_count.values())
-
+    resumable_n = 0
+    try:
+        from agent.session_globals import get_db
+        db = await get_db()
+        resumable_n = len(await db.get_incomplete_resumable_tasks())
+    except Exception:
+        pass
     provider_status = f"📡 Provider: *{_current_provider}*\n"
+    resumable_line = f"\n📌 Resumable: {resumable_n} (will resume on next startup)" if resumable_n else ""
     await update.message.reply_text(
         f"✅ Agent is running\n"
         f"⏱ Uptime: {h}h {m}m {s}s\n"
         f"{provider_status}"
-        f"📋 Active: {running} running, {queued} queued",
+        f"📋 Active: {running} running, {queued} queued"
+        f"{resumable_line}",
         parse_mode="Markdown"
     )
 
@@ -388,23 +417,17 @@ async def panic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"✅ Cleared {n} active tasks.")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages as tasks. Same-chat tasks run one after another."""
+async def _execute_task(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    goal: str,
+    resumable_task_id: int | None = None,
+) -> None:
+    """Run one task under chat lock; optional resumable_task_id for DB status updates."""
     global _task_counter, _current_provider
-
     user = update.effective_user
     username = user.username if user else None
     user_id = user.id if user else None
-
-    if not _is_user_allowed(username):
-        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
-        logger.warning("Unauthorized message from user: %s (id=%s)", username, user_id)
-        return
-
-    text = update.message.text
-    if not text:
-        return
-
     chat_id = update.effective_chat.id
     lock = _get_chat_lock(chat_id)
     _chat_queued_count[chat_id] = _chat_queued_count.get(chat_id, 0) + 1
@@ -413,49 +436,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         async with lock:
             got_lock = True
             _chat_queued_count[chat_id] = max(0, _chat_queued_count.get(chat_id, 1) - 1)
-
             _task_counter += 1
             task_id = _task_counter
             provider = _current_provider
-            task_info = TaskInfo(
-                task_text=text,
+            _active_tasks[task_id] = TaskInfo(
+                task_text=goal,
                 chat_id=chat_id,
                 username=username,
                 user_id=user_id,
                 provider=provider,
             )
-            _active_tasks[task_id] = task_info
-
-            log_task_start(task_id, text)
-            log_user_message(chat_id, text)
-            logger.info(f"Task #{task_id} started by {username}: {text[:60]}... (provider={provider})")
-
+            log_task_start(task_id, goal)
+            log_user_message(chat_id, goal)
+            logger.info(f"Task #{task_id} started by {username}: {goal[:60]}... (provider={provider})")
             await update.message.reply_text(
                 f"⏳ Processing (task #{task_id}, provider={provider})...",
             )
-
             task_start = time.time()
             try:
                 from agent.core.runner import run_task_with_session
-
                 result = await run_task_with_session(
-                    text,
+                    goal,
                     chat_id=chat_id,
                     username=username,
                     user_id=user_id,
                     provider=provider,
+                    resumable_task_id=resumable_task_id,
                 )
                 duration = time.time() - task_start
                 await _send_long_message(update.message, result)
                 log_agent_response(chat_id, result)
                 log_task_end(task_id, True, duration)
-
             except Exception as e:
                 duration = time.time() - task_start
                 logger.exception(f"Task #{task_id} failed")
                 await update.message.reply_text(f"❌ Task failed: {e}")
                 log_task_end(task_id, False, duration, str(e))
-
             finally:
                 _active_tasks.pop(task_id, None)
     finally:
@@ -463,15 +479,140 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _chat_queued_count[chat_id] = max(0, _chat_queued_count.get(chat_id, 1) - 1)
 
 
+async def long_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start a resumable (long) task: survives bot restart and continues on next startup."""
+    if not _is_user_allowed(update.effective_user.username if update.effective_user else None):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    goal = " ".join(context.args).strip() if context.args else ""
+    if not goal:
+        await update.message.reply_text("Usage: /long <goal> — task will resume after bot restart.")
+        return
+    chat_id = update.effective_chat.id
+    from agent.session_globals import get_db
+    db = await get_db()
+    session_id = await db.get_or_create_session(chat_id)
+    resumable_task_id = await db.upsert_resumable_task(session_id, chat_id, goal)
+    await update.message.reply_text(
+        "Task saved as resumable. If the bot restarts, it will continue automatically."
+    )
+    await _execute_task(update, context, goal, resumable_task_id=resumable_task_id)
+
+
+async def longlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List resumable (long) tasks for this chat: running, then recent completed/failed."""
+    if not _is_user_allowed(update.effective_user.username if update.effective_user else None):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        return
+    chat_id = update.effective_chat.id
+    from agent.session_globals import get_db
+    db = await get_db()
+    tasks = await db.get_resumable_tasks(chat_id=chat_id, limit=15)
+    if not tasks:
+        await update.message.reply_text("Нет long‑задач в этом чате.")
+        return
+    status_emoji = {"running": "🔄", "completed": "✅", "failed": "❌", "cancelled": "⏹"}
+    lines = ["*Long‑задачи (этот чат):*\n"]
+    for t in tasks:
+        em = status_emoji.get(t["status"], "•")
+        raw = (t["goal"] or "")[:55] + ("…" if len(t["goal"] or "") > 55 else "")
+        goal_preview = raw.replace("_", r"\_").replace("*", r"\*")
+        res = f"resume={t['resume_count']}" if t.get("resume_count") else ""
+        lines.append(f"{em} #{t['id']} {t['status']} {res}\n   _{goal_preview}_")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming text messages as tasks. Same-chat tasks run one after another."""
+    if not _is_user_allowed(update.effective_user.username if update.effective_user else None):
+        await update.message.reply_text(WHITELIST_ERROR, parse_mode="Markdown")
+        logger.warning("Unauthorized message from user: %s", update.effective_user)
+        return
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+    await _execute_task(update, context, text, resumable_task_id=None)
+
+
+def _build_resume_prompt(goal: str, resume_count: int) -> str:
+    return (
+        "[Resume] The process was restarted. Continue the following task from where you left off.\n\n"
+        f"Original goal: {goal}\n\n"
+        f"Resume count: {resume_count}. If you have get_todo, call it to see remaining steps and continue. "
+        "Reply with progress and final or intermediate result."
+    )
+
+
+async def _do_resume(bot, task_row: dict) -> None:
+    """Resume one incomplete task: send to chat, run agent, update status."""
+    task_id = task_row["id"]
+    chat_id = task_row["chat_id"]
+    goal = task_row["goal"]
+    resume_count = task_row["resume_count"]
+    if resume_count >= MAX_RESUME_COUNT:
+        from agent.session_globals import get_db
+        db = await get_db()
+        await db.mark_resumable_task_failed(task_id, "Max resume count exceeded")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"Resumable task failed: max resume count ({MAX_RESUME_COUNT}) exceeded. Goal: {goal[:100]}...",
+        )
+        return
+    lock = _get_chat_lock(chat_id)
+    async with lock:
+        from agent.session_globals import get_db
+        from agent.core.runner import run_task_with_session
+        db = await get_db()
+        await db.increment_resume_and_set_resumed_at(task_id)
+        resume_count += 1
+        prompt = _build_resume_prompt(goal, resume_count)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"Resuming task ({resume_count}/{MAX_RESUME_COUNT}): {goal[:80]}{'…' if len(goal) > 80 else ''}",
+        )
+        try:
+            result = await run_task_with_session(
+                prompt,
+                chat_id=chat_id,
+                username=None,
+                user_id=None,
+                provider=_current_provider,
+                resumable_task_id=None,
+            )
+            await db.mark_resumable_task_completed(task_id)
+            await _send_long_to_chat(bot, chat_id, result)
+        except Exception as e:
+            logger.exception("Resume task failed: %s", e)
+            await db.mark_resumable_task_failed(task_id, str(e))
+            await bot.send_message(chat_id=chat_id, text=f"❌ Resume failed: {e}")
+
+
+async def _resume_incomplete_tasks(app) -> None:
+    """Load incomplete resumable tasks and run resume for each (called on bot startup)."""
+    from agent.session_globals import get_db
+    try:
+        db = await get_db()
+        incomplete = await db.get_incomplete_resumable_tasks()
+    except Exception as e:
+        logger.exception("Failed to load incomplete resumable tasks: %s", e)
+        return
+    for row in incomplete:
+        asyncio.create_task(_do_resume(app.bot, row))
+
+
 def run_bot() -> None:
     """Start the Telegram bot with long-polling."""
     setup_logging()
     logger.info(f"Starting Telegram bot (provider={_current_provider})")
 
+    async def _on_post_init(application):
+        asyncio.create_task(_resume_incomplete_tasks(application))
+
     app = (
         ApplicationBuilder()
         .token(TG_BOT_KEY)
         .concurrent_updates(True)
+        .post_init(_on_post_init)
         .build()
     )
 
@@ -482,6 +623,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("provider", provider_cmd))
     app.add_handler(CommandHandler("context", context_cmd))
     app.add_handler(CommandHandler("clear", clear_cmd))
+    app.add_handler(CommandHandler("long", long_cmd))
+    app.add_handler(CommandHandler("longlist", longlist_cmd))
     app.add_handler(CommandHandler("tasks", tasks_cmd))
     app.add_handler(CommandHandler("logs", logs_cmd))
     app.add_handler(CommandHandler("exportlogs", export_logs))

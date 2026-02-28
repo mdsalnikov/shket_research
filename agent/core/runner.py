@@ -26,6 +26,36 @@ from agent.healing import (
 
 logger = logging.getLogger(__name__)
 
+AUTO_REPAIR_TASK_PREFIX = "[Auto-repair]"
+_MAX_REPAIR_PARTIAL_LEN = 3000
+
+
+def _build_repair_goal(
+    original_task: str,
+    last_error: str,
+    partial_output: str | None,
+    attempt_count: int,
+) -> str:
+    """Build goal for a resumable auto-repair task with full error context."""
+    partial = (partial_output or "").strip()
+    if len(partial) > _MAX_REPAIR_PARTIAL_LEN:
+        partial = partial[: _MAX_REPAIR_PARTIAL_LEN] + "\n... [truncated]"
+    return (
+        f"{AUTO_REPAIR_TASK_PREFIX} The previous run failed after {attempt_count} attempt(s). "
+        "Fix the cause and complete the original task. Use get_todo if needed, then reply with the result.\n\n"
+        f"Original goal:\n{original_task}\n\n"
+        f"Last error:\n{last_error}\n\n"
+        + (f"Partial output before failure:\n{partial}\n\n" if partial else "")
+        + "Fix the error and complete or report progress."
+    )
+
+
+def _should_create_repair_task(task: str, deps: AgentDeps | None) -> bool:
+    """True if we are in a bot chat and this task is not already an auto-repair."""
+    if deps is None or deps.chat_id == 0:
+        return False
+    return not task.strip().startswith(AUTO_REPAIR_TASK_PREFIX)
+
 
 async def run_with_retry(
     task: str,
@@ -33,6 +63,7 @@ async def run_with_retry(
     chat_id: int = 0,
     deps: AgentDeps | None = None,
     provider: str | None = None,
+    resumable_task_id: int | None = None,
 ) -> str:
     """Run agent task with session support and self-healing retries.
 
@@ -99,6 +130,8 @@ async def run_with_retry(
             # Successful run – store the final output
             output_text = getattr(result, "output", None) if not isinstance(result, str) else result
             await deps.add_assistant_message(output_text)
+            if resumable_task_id is not None:
+                await deps.db.mark_resumable_task_completed(resumable_task_id)
             logger.info("Task completed successfully")
             return output_text
         else:
@@ -110,10 +143,25 @@ async def run_with_retry(
             else:
                 output_text = str(result)
             await deps.add_assistant_message(output_text)
+            if resumable_task_id is not None:
+                await deps.db.mark_resumable_task_failed(resumable_task_id, "Fallback after retries")
+            if _should_create_repair_task(task, deps):
+                last_err = getattr(deps, "last_error", None) or "Fallback after retries"
+                attempt_count = getattr(deps, "retry_count", None) or n
+                repair_goal = _build_repair_goal(task, last_err, output_text, attempt_count)
+                await deps.db.upsert_resumable_task(deps.session_id, deps.chat_id, repair_goal)
+                logger.info("Created auto-repair resumable task for chat_id=%s", deps.chat_id)
             return output_text
     except Exception as e:
         # Last-resort error handling
         logger.error(f"Unexpected error in runner: {e}")
+        if resumable_task_id is not None and deps is not None:
+            await deps.db.mark_resumable_task_failed(resumable_task_id, str(e))
+        if _should_create_repair_task(task, deps):
+            attempt_count = getattr(deps, "retry_count", None) or 1
+            repair_goal = _build_repair_goal(task, str(e), None, attempt_count)
+            await deps.db.upsert_resumable_task(deps.session_id, deps.chat_id, repair_goal)
+            logger.info("Created auto-repair resumable task for chat_id=%s after exception", deps.chat_id)
         fallback = FallbackHandler()
         return fallback.generate_from_error(e, attempt_count=1)
 
@@ -125,6 +173,7 @@ async def run_task_with_session(
     user_id: int | None = None,
     session_scope: str = "main",
     provider: str | None = None,
+    resumable_task_id: int | None = None,
 ) -> str:
     """Run a task with full session management.
 
@@ -144,7 +193,9 @@ async def run_task_with_session(
         session_scope=session_scope,
     )
 
-    return await run_with_retry(task, deps=deps, provider=provider)
+    return await run_with_retry(
+        task, deps=deps, provider=provider, resumable_task_id=resumable_task_id
+    )
 
 
 async def run_simple_task(task: str, model_name: str | None = None, provider: str | None = None) -> str:

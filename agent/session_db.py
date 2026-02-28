@@ -100,6 +100,7 @@ class SessionDB:
                 await self._db.execute("PRAGMA busy_timeout=5000")
                 await self._create_tables()
                 await self._migrate_sessions_message_history()
+                await self._migrate_resumable_tasks()
                 self._initialized = True
                 logger.info("SessionDB initialized at %s", self.db_path)
                 return
@@ -215,6 +216,114 @@ class SessionDB:
         except sqlite3.OperationalError as e:
             if "duplicate column" not in str(e).lower():
                 raise
+
+    async def _migrate_resumable_tasks(self) -> None:
+        """Create resumable_tasks table if missing (for resumable/long-running tasks)."""
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS resumable_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                goal TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                resumed_at REAL,
+                resume_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+        """)
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resumable_tasks_status_updated "
+            "ON resumable_tasks(status, updated_at)"
+        )
+        await self._db.commit()
+        logger.info("Resumable tasks table ready")
+
+    async def upsert_resumable_task(self, session_id: int, chat_id: int, goal: str) -> int:
+        """Set or update resumable task for session to running. Cancel any existing running for this session. Return task id."""
+        async with self._lock:
+            now = time.time()
+            await self._db.execute(
+                "UPDATE resumable_tasks SET status = 'cancelled', updated_at = ? WHERE session_id = ? AND status = 'running'",
+                (now, session_id),
+            )
+            await self._db.execute(
+                """INSERT INTO resumable_tasks (session_id, chat_id, goal, status, created_at, updated_at, resume_count)
+                   VALUES (?, ?, ?, 'running', ?, ?, 0)""",
+                (session_id, chat_id, goal, now, now),
+            )
+            await self._db.commit()
+            cursor = await self._db.execute("SELECT last_insert_rowid()")
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def get_incomplete_resumable_tasks(self) -> list[dict]:
+        """Return all rows with status='running', ordered by updated_at."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                """SELECT id, session_id, chat_id, goal, status, created_at, updated_at, resumed_at, resume_count, last_error
+                   FROM resumable_tasks WHERE status = 'running' ORDER BY updated_at ASC"""
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_resumable_tasks(
+        self, chat_id: int | None = None, limit: int = 20
+    ) -> list[dict]:
+        """Return recent resumable tasks (any status), optionally for one chat_id, by updated_at DESC."""
+        async with self._lock:
+            if chat_id is not None:
+                cursor = await self._db.execute(
+                    """SELECT id, session_id, chat_id, goal, status, created_at, updated_at, resumed_at, resume_count, last_error
+                       FROM resumable_tasks WHERE chat_id = ? ORDER BY updated_at DESC LIMIT ?""",
+                    (chat_id, limit),
+                )
+            else:
+                cursor = await self._db.execute(
+                    """SELECT id, session_id, chat_id, goal, status, created_at, updated_at, resumed_at, resume_count, last_error
+                       FROM resumable_tasks ORDER BY updated_at DESC LIMIT ?""",
+                    (limit,),
+                )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_resumable_task_by_id(self, task_id: int) -> dict | None:
+        """Return one resumable task by id or None."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                """SELECT id, session_id, chat_id, goal, status, created_at, updated_at, resumed_at, resume_count, last_error
+                   FROM resumable_tasks WHERE id = ?""",
+                (task_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def mark_resumable_task_completed(self, task_id: int) -> None:
+        async with self._lock:
+            await self._db.execute(
+                "UPDATE resumable_tasks SET status = 'completed', updated_at = ? WHERE id = ?",
+                (time.time(), task_id),
+            )
+            await self._db.commit()
+
+    async def mark_resumable_task_failed(self, task_id: int, last_error: str | None = None) -> None:
+        async with self._lock:
+            await self._db.execute(
+                "UPDATE resumable_tasks SET status = 'failed', updated_at = ?, last_error = ? WHERE id = ?",
+                (time.time(), last_error, task_id),
+            )
+            await self._db.commit()
+
+    async def increment_resume_and_set_resumed_at(self, task_id: int) -> None:
+        async with self._lock:
+            now = time.time()
+            await self._db.execute(
+                "UPDATE resumable_tasks SET resume_count = resume_count + 1, resumed_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, task_id),
+            )
+            await self._db.commit()
 
     async def get_model_message_history(self, session_id: int) -> str | None:
         """Get stored pydantic-ai message history (JSON) for this session."""
