@@ -34,6 +34,7 @@ def test_runner_with_provider():
         with patch("agent.core.runner.AgentDeps") as mock_deps_class:
             mock_deps = AsyncMock()
             mock_deps.add_user_message = AsyncMock()
+            mock_deps.get_model_message_history = AsyncMock(return_value="")
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
 
             asyncio.run(run_with_retry("task", provider="openrouter"))

@@ -52,3 +52,5 @@ ignore = ["E501"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = ["agent: tests that call the real LLM (require OPENROUTER_API_KEY)"]
+# Disable plugins that can block process exit after tests pass
+addopts = "-p no:logfire -p no:anyio"

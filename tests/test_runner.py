@@ -22,6 +22,7 @@ async def test_run_succeeds_first_try():
             mock_deps = AsyncMock()
             mock_deps.add_user_message = AsyncMock()
             mock_deps.add_assistant_message = AsyncMock()
+            mock_deps.get_model_message_history = AsyncMock(return_value="")
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
 
             out = await run_with_retry("task", max_retries=3)
@@ -49,6 +50,7 @@ async def test_run_retries_on_failure():
             mock_deps = AsyncMock()
             mock_deps.add_user_message = AsyncMock()
             mock_deps.add_assistant_message = AsyncMock()
+            mock_deps.get_model_message_history = AsyncMock(return_value="")
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
 
             out = await run_with_retry("task", max_retries=3)
@@ -71,6 +73,7 @@ async def test_run_gives_up_after_max_retries():
             mock_deps = AsyncMock()
             mock_deps.add_user_message = AsyncMock()
             mock_deps.add_assistant_message = AsyncMock()
+            mock_deps.get_model_message_history = AsyncMock(return_value="")
             mock_deps_class.create = AsyncMock(return_value=mock_deps)
 
             out = await run_with_retry("task", max_retries=2)
