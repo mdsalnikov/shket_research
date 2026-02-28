@@ -12,7 +12,9 @@ Format example:
 
 import os
 import time
+import functools
 from datetime import datetime
+from typing import Callable, Any
 
 from agent.config import PROJECT_ROOT
 
@@ -100,9 +102,56 @@ class ToolCallLogger:
             f.write(f"{_timestamp()} | ✅ {self.tool_name} → {_truncate(result, 3000)} ({duration:.2f}s)\n")
 
 
-def log_tool_call(tool_name: str, params: str | None = None) -> ToolCallLogger:
-    """Create a context manager for logging a tool call."""
-    return ToolCallLogger(tool_name, params)
+def log_tool_call(tool_name: str | None = None):
+    """Decorator for logging tool calls with timing.
+    
+    Usage:
+        @log_tool_call
+        def my_tool(arg1, arg2):
+            ...
+        
+        # Or with custom name:
+        @log_tool_call("custom_name")
+        def my_tool(arg1, arg2):
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            # Use provided name or function name
+            name = tool_name if tool_name else func.__name__
+            
+            # Prepare params string
+            params = {}
+            if args:
+                # Get parameter names from function signature
+                import inspect
+                sig = inspect.signature(func)
+                param_names = list(sig.parameters.keys())
+                for i, arg in enumerate(args):
+                    if i < len(param_names):
+                        params[param_names[i]] = arg
+            params.update(kwargs)
+            
+            params_str = ", ".join(f"{k}={_truncate(str(v), 300)}" for k, v in params.items()) if params else None
+            
+            with ToolCallLogger(name, params_str) as logger:
+                try:
+                    result = func(*args, **kwargs)
+                    logger.log_result(_truncate(str(result), 3000))
+                    return result
+                except Exception as e:
+                    raise
+        
+        return wrapper
+    
+    # If called without parentheses (e.g., @log_tool_call), tool_name will be the function
+    if callable(tool_name):
+        func = tool_name
+        tool_name = None
+        return decorator(func)
+    
+    return decorator
 
 
 def log_error(context: str, error: str) -> None:

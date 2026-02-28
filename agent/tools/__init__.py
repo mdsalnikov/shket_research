@@ -121,14 +121,14 @@ def register_tools(agent: Agent) -> None:
     Args:
         agent: Pydantic AI agent instance to register tools with.
     """
-    # Core tools
+    # Core tools (no context needed)
     agent.tool_plain(run_shell)
     agent.tool_plain(read_file)
     agent.tool_plain(write_file)
     agent.tool_plain(list_dir)
     agent.tool_plain(web_search)
     
-    # Browser tools
+    # Browser tools (no context needed)
     agent.tool_plain(browser_navigate)
     agent.tool_plain(browser_screenshot)
     agent.tool_plain(browser_get_text)
@@ -138,16 +138,16 @@ def register_tools(agent: Agent) -> None:
     agent.tool_plain(browser_get_url)
     agent.tool_plain(browser_refresh)
     
-    # Todo tools
+    # Todo tools (no context needed)
     agent.tool_plain(create_todo)
     agent.tool_plain(get_todo)
     agent.tool_plain(mark_todo_done)
     
-    # Memory tools
-    agent.tool_plain(recall)
-    agent.tool_plain(remember)
+    # Memory tools (need RunContext)
+    agent.tool(recall)
+    agent.tool(remember)
     
-    # Git tools
+    # Git tools (no context needed)
     agent.tool_plain(git_status)
     agent.tool_plain(git_add)
     agent.tool_plain(git_commit)
@@ -155,36 +155,36 @@ def register_tools(agent: Agent) -> None:
     agent.tool_plain(git_pull)
     agent.tool_plain(git_checkout)
     
-    # GitHub CLI
+    # GitHub CLI (no context needed)
     agent.tool_plain(run_gh)
     
-    # Agent tools
+    # Agent tools (no context needed)
     agent.tool_plain(request_restart)
     
-    # AGENTS.md tools
+    # AGENTS.md tools (no context needed)
     agent.tool_plain(read_agents_md)
     agent.tool_plain(get_agents_rules)
     agent.tool_plain(get_agents_context)
     
-    # Skills tools
+    # Skills tools (no context needed)
     agent.tool_plain(list_skills)
     agent.tool_plain(get_skill)
     agent.tool_plain(find_relevant_skills)
     agent.tool_plain(create_skill)
     
-    # Subagent tools
+    # Subagent tools (no context needed)
     agent.tool_plain(list_subagents)
     agent.tool_plain(get_subagent)
     agent.tool_plain(delegate_task)
     agent.tool_plain(route_task)
     agent.tool_plain(create_subagent)
     
-    # Deep research tools
+    # Deep research tools (no context needed)
     agent.tool_plain(deep_research)
     agent.tool_plain(quick_research)
     agent.tool_plain(compare_sources)
     
-    # Self-test and backup tools
+    # Self-test and backup tools (no context needed)
     agent.tool_plain(backup_codebase)
     agent.tool_plain(list_backups)
     agent.tool_plain(restore_from_backup)

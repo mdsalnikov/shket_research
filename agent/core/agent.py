@@ -161,52 +161,38 @@ ROLLBACK (if anything fails after you edited files):
 
 RULES:
 - Do not remove or weaken backup, list_backups, restore_from_backup, or this protocol.
-- Never skip backup_codebase(), run_tests(), run_agent_subprocess(), or code-simplifier
-- Never push or open a PR before tests and run_agent_subprocess succeed
-- Never merge a PR yourself unless explicitly asked and you are 100% confident
-- Always use run_tests() and run_agent_subprocess() after changes
-- Use git_push --force-with-lease only when necessary (e.g., after rebase)
-- Always check git_status before committing
-
-=============================================================================
-PROVIDER SELECTION
-=============================================================================
-
-The agent supports two providers:
-- vLLM (default): Local OpenAI-compatible API at {vllm_url}
-- OpenRouter: Cloud API with many models
-
-Provider is selected via PROVIDER_DEFAULT in config.
-
-=============================================================================
-VERSION: {version}
-=============================================================================
+- Never skip backup_codebase(), run_tests(), run_agent_subprocess(), or code-simplifier delegation
+- Never push or open a PR before tests and run_agent_subprocess pass
+- Always delegate to code-simplifier after self-modification completes successfully
 """
 
 
-def get_agent(
-    model_name: str | None = None,
-    provider: str | None = None,
-) -> Agent[AgentDeps]:
-    """Build and return the agent with the specified model and provider.
-
+def create_agent(provider: str | None = None, model_name: str | None = None) -> Agent[AgentDeps]:
+    """Create and configure the agent with tools and system prompt.
+    
     Args:
-        model_name: Model name to use. Defaults to config default.
-        provider: Provider to use ("vllm" or "openrouter"). Defaults to config default.
-
+        provider: Provider to use ("vllm" or "openrouter"). Defaults to PROVIDER_DEFAULT.
+        model_name: Optional model name override.
+    
     Returns:
-        Configured Pydantic AI agent with tools and system prompt.
+        Configured Pydantic AI agent instance.
     """
-    # Resolve provider
+    # Determine provider
     if provider is None:
         provider = PROVIDER_DEFAULT
-
-    # Resolve model
-    if model_name is None:
-        model_name = DEFAULT_MODEL
-
-    # Select model based on provider
-    if provider == "vllm":
+    
+    # Create model based on provider
+    if provider.lower() == "openrouter":
+        api_key = OPENROUTER_API_KEY
+        if not api_key:
+            logger.warning("OPENROUTER_API_KEY not set, falling back to vLLM")
+            provider = "vllm"
+        else:
+            model_name = model_name or OPENROUTER_MODEL_NAME
+            model = OpenRouterModel(model_name, OpenRouterProvider(api_key=api_key))
+    else:
+        # vLLM (default)
+        model_name = model_name or VLLM_MODEL_NAME
         model = OpenAIChatModel(
             model_name=model_name,
             provider=OpenAIProvider(
@@ -214,23 +200,13 @@ def get_agent(
                 api_key=VLLM_API_KEY,
             ),
         )
-    elif provider == "openrouter":
-        model = OpenRouterModel(
-            model_name=model_name,
-            provider=OpenRouterProvider(api_key=OPENROUTER_API_KEY),
-        )
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
-
-    logger.info("Agent initialized with provider=%s, model=%s, version=%s",
-                provider, model_name, VERSION)
-
+    
+    logger.info(f"Creating agent with provider={provider}, model={model_name}")
+    
+    # Create agent with system prompt
     agent = Agent(
         model=model,
-        system_prompt=SYSTEM_PROMPT.format(
-            version=VERSION,
-            vllm_url=VLLM_BASE_URL,
-        ),
+        system_prompt=SYSTEM_PROMPT.format(version=VERSION),
         deps_type=AgentDeps,
     )
     
@@ -240,18 +216,16 @@ def get_agent(
     return agent
 
 
-async def build_session_agent(
-    provider: str | None = None,
-) -> Agent[AgentDeps]:
-    """Build agent with session support.
+async def build_session_agent(provider: str | None = None) -> Agent[AgentDeps]:
+    """Build agent for session-based runs.
     
-    This is the main entry point for creating agents with full session support
-    and tool registration.
+    This is an async wrapper around create_agent for compatibility
+    with session-based runner code.
     
     Args:
-        provider: Provider to use ("vllm" or "openrouter"). Defaults to config.
+        provider: Provider to use ("vllm" or "openrouter").
     
     Returns:
-        Configured Pydantic AI agent with tools and session support.
+        Configured Pydantic AI agent instance.
     """
-    return get_agent(provider=provider)
+    return create_agent(provider=provider)
