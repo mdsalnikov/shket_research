@@ -2,7 +2,7 @@
 
 Autonomous LLM-powered research agent for executing tasks on an Ubuntu server. Supports CLI, Telegram bot, and deep research capabilities.
 
-> **Version**: 0.4.2 | **License**: MIT | **Python**: 3.11+
+> **Version**: 0.4.5 | **License**: MIT | **Python**: 3.11+
 
 ---
 
@@ -63,7 +63,8 @@ shket_research/
 │   ├── coder.yaml         # Code generation
 │   ├── researcher.yaml    # Information gathering
 │   ├── reviewer.yaml      # Code review
-│   └── tester.yaml        # Test creation
+│   ├── tester.yaml        # Test creation
+│   └── code-simplifier.md # Code simplification (MANDATORY after self-mod)
 ├── tests/                 # Test suite
 │   ├── test_cli.py        # CLI tests
 │   ├── test_healing.py    # Self-healing tests
@@ -92,6 +93,7 @@ shket_research/
 - **Memory**: L0/L1/L2 hierarchy for efficient retrieval
 - **Tools**: Shell, filesystem, web search, git, GitHub CLI, deep research
 - **Self-Healing**: Error classification, context compression, fallback generation
+- **Subagents**: Specialized agents for specific tasks (coder, researcher, code-simplifier)
 
 ### Design Patterns
 
@@ -99,6 +101,7 @@ shket_research/
 2. **Session Isolation**: Each chat has isolated session state
 3. **Error Recovery**: Multi-layer healing with smart retries
 4. **Tool Abstraction**: Consistent interface for all tools
+5. **Subagent Delegation**: Route tasks to specialized agents
 
 ---
 
@@ -138,6 +141,16 @@ def example_function(param: str) -> int:
     return 42
 ```
 
+### Code Simplification Principles
+
+After any code modification, the code-simplifier subagent ensures:
+
+1. **Clarity over brevity**: Explicit code is better than clever one-liners
+2. **No nested ternaries**: Use if/else chains for multiple conditions
+3. **Meaningful names**: Variables and functions should explain their intent
+4. **Single responsibility**: Functions should do one thing well
+5. **Preserve functionality**: Never change what code does, only how it does it
+
 ---
 
 ## Tools
@@ -149,6 +162,7 @@ def example_function(param: str) -> int:
 | `write_file` | Write content to file |
 | `list_dir` | List directory contents |
 | `web_search` | Search the web via DuckDuckGo |
+| `browser_*` | Headless browser automation (8 tools) |
 | `deep_research` | Multi-step autonomous research |
 | `quick_research` | Single-step research query |
 | `compare_sources` | Compare info across sources |
@@ -275,332 +289,191 @@ Skills provide domain expertise and task patterns. Located in `skills/` director
 ### Available Categories
 
 - **programming**: Python, JavaScript, and other programming skills
-- **development**: Git, code review, and development workflows
-- **research**: Web research, data analysis, and literature review
-- **devops**: Deployment, CI/CD, and infrastructure
+- **development**: Git, testing, and development workflows
+- **research**: Information gathering and synthesis
+- **devops**: Deployment, monitoring, and infrastructure
 
 ### Using Skills
 
 ```python
-# List all skills
-await list_skills()
-
-# Get skills by category
-await list_skills("programming")
+# Find relevant skills for a task
+skills = find_relevant_skills("implement REST API")
 
 # Get specific skill
-await get_skill("python")
+skill = get_skill("python-rest-api")
 
-# Find relevant skills for a task
-await find_relevant_skills("write a python script")
-
-# Create a new skill
-await create_skill(
-    name="my_skill",
-    category="custom",
-    content="# My Skill\n\nSkill content..."
-)
-```
-
-### Skill Format
-
-```markdown
-# Skill Name
-
-## Description
-Brief description of what this skill covers.
-
-## When to Use
-- Use case 1
-- Use case 2
-- Use case 3
-
-## Tools
-- Tool 1: Description
-- Tool 2: Description
-
-## Patterns
-Common patterns and best practices.
-
-## Related Skills
-- related_skill_1
-- related_skill_2
+# Create new skill
+create_skill("custom-skill", "description", content)
 ```
 
 ---
 
 ## Subagents System
 
-Subagents are specialized agents that handle specific types of tasks.
+Subagents are specialized agents with isolated context for specific tasks.
 
 ### Available Subagents
 
-- **coder**: Code generation and modification
-- **researcher**: Information gathering and research
-- **reviewer**: Code review and quality assurance
-- **tester**: Test creation and execution
+| Subagent | Purpose | When to Use |
+|----------|---------|-------------|
+| `coder` | Code generation | Writing new code, refactoring |
+| `researcher` | Information gathering | Deep research tasks |
+| `reviewer` | Code review | Reviewing code changes |
+| `tester` | Test creation | Writing unit/integration tests |
+| `code-simplifier` | Code simplification | **MANDATORY after self-modification** |
+
+### Code-Simplifier (MANDATORY)
+
+After **any self-modification**, the code-simplifier subagent **MUST** be invoked:
+
+```python
+delegate_task("code-simplifier", "Review and simplify the recently modified code")
+```
+
+**What it does**:
+- Analyzes recently modified code for clarity and maintainability
+- Applies project standards from AGENTS.md
+- Simplifies complex code while preserving functionality
+- Runs tests to ensure nothing broke
+- Provides a summary of improvements made
+
+**Why it's mandatory**:
+- Ensures consistent code quality
+- Prevents code rot from quick fixes
+- Maintains readability for future modifications
+- Catches complexity before it becomes a problem
 
 ### Using Subagents
 
 ```python
-# List all subagents
-await list_subagents()
+# Auto-route to appropriate subagent
+result = route_task("write a unit test for function X")
 
-# Get specific subagent
-await get_subagent("coder")
+# Explicit delegation
+result = delegate_task("coder", "implement feature Y")
 
-# Delegate task to subagent
-await delegate_task("coder", "write a function")
-
-# Auto-route task to appropriate subagent
-await route_task("write a python script")
-
-# Create a new subagent
-await create_subagent(
-    name="my_agent",
-    description="Custom agent",
-    tools=["read_file", "write_file"],
-    triggers=["custom", "trigger"],
-    system_prompt="You are a custom agent..."
-)
-```
-
-### Subagent Format (YAML)
-
-```yaml
-name: agent_name
-description: Brief description
-version: 1.0.0
-system_prompt: |
-  You are a specialized agent. Focus on...
-tools:
-  - tool1
-  - tool2
-context_files:
-  - AGENTS.md
-  - README.md
-triggers:
-  - trigger1
-  - trigger2
-related:
-  - related_agent
-```
-
----
-
-## Deep Research System
-
-Advanced multi-step research capabilities.
-
-### Tools
-
-- **deep_research**: Full multi-step research with synthesis
-- **quick_research**: Single-step quick lookup
-- **compare_sources**: Compare information across sources
-
-### Using Deep Research
-
-```python
-# Full deep research
-await deep_research(
-    "machine learning in healthcare",
-    goals=["find advances", "identify challenges"],
-    max_steps=10,
-    max_depth=3
-)
-
-# Quick research
-await quick_research("python best practices")
-
-# Compare sources
-await compare_sources("React vs Vue")
-```
-
-### Research Workflow
-
-1. **Plan**: Create research plan based on topic and goals
-2. **Search**: Execute multi-step searches with refinement
-3. **Verify**: Cross-reference findings across sources
-4. **Synthesize**: Group findings by theme
-5. **Report**: Generate structured report with confidence scores
-
----
-
-## Self-Healing System
-
-The agent can recover from errors and continue operation.
-
-### Error Types
-
-- **Context Overflow**: Compress history and continue
-- **Usage Limit**: Generate fallback response
-- **Rate Limit**: Wait and retry
-- **Auth Error**: Abort with clear message
-- **Recoverable**: Retry with exponential backoff
-
-### Healing Strategies
-
-1. **Classifier**: Categorize error type
-2. **Compressor**: Reduce context size if needed
-3. **Fallback**: Generate helpful response for non-recoverable errors
-4. **Strategies**: Determine action based on error type
-
----
-
-## Memory System
-
-Long-term memory with L0/L1/L2 hierarchy.
-
-### Memory Levels
-
-- **L0 (Abstract)**: One-line summary
-- **L1 (Overview)**: 2-3 sentence overview
-- **L2 (Details)**: Full detailed information
-
-### Using Memory
-
-```python
-# Save to memory
-await remember(
-    key="project_status",
-    category="Project",
-    abstract="Project is in development",
-    overview="Active development with regular updates",
-    details="Full details about the project..."
-)
-
-# Recall from memory
-await recall(query="project status")
-await recall(query="API config", category="System")
-```
-
-### Categories
-
-- **System**: System configuration and settings
-- **Environment**: Environment-specific information
-- **Skill**: Skills and capabilities
-- **Project**: Project-specific information
-- **Comm**: Communication preferences
-- **Security**: Security-related information
-
----
-
-## Session Management
-
-SQLite-based session persistence with per-chat isolation.
-
-### Features
-
-- Isolated session state per chat
-- SQLite database for persistence
-- OpenClaw-inspired architecture
-- Automatic session cleanup
-
----
-
-## Git and GitHub Integration
-
-Full version control support with GitHub CLI.
-
-### Git Operations
-
-```bash
-git_status    # Check repository status
-git_add       # Stage files
-git_commit    # Create commit
-git_push      # Push to remote
-git_pull      # Pull from remote
-git_checkout  # Switch branches
-```
-
-### GitHub CLI
-
-```python
-# Create PR
-await run_gh("pr create --title '...' --body '...'")
-
-# View PR
-await run_gh("pr view")
-
-# List PRs
-await run_gh("pr list")
+# List available subagents
+subagents = list_subagents()
 ```
 
 ---
 
 ## Self-Modification Protocol
 
-When modifying agent code, follow this protocol:
+When modifying your own code, follow this protocol:
 
-### Phase 1 — Prepare
+### Phase 1: Prepare
+1. `backup_codebase()` - Create full backup
+2. Read current files with `read_file()`
+3. Create branch for non-trivial changes
 
-1. **backup_codebase()** — Create full backup
-2. **Read current files** — Understand code to change
-3. **Branch** — Create branch for non-trivial changes
+### Phase 2: Edit & Verify
+4. Make changes with `write_file()`
+5. Update VERSION file
+6. Run `run_tests()` - all tests must pass
+7. Run `run_agent_subprocess("run status")` - verify new code loads
 
-### Phase 2 — Edit & Verify
+### Phase 3: Commit & Push
+- **Small fix**: Commit to main, push, request_restart
+- **Large change**: Create PR, wait for user merge
 
-4. **Make changes** — Use write_file for modifications
-5. **Update VERSION** — Bump version number
-6. **run_tests()** — Run test suite
-7. **run_agent_subprocess()** — Test in fresh subprocess
+### Phase 4: Code Simplification (MANDATORY)
+8. **`delegate_task("code-simplifier", "Review and simplify the recently modified code")`**
+   - This step ensures code quality after self-modification
+   - Never skip this step
 
-### Phase 3 — Deploy
+---
 
-**Small Fix**: Commit to main, push, restart
+## Error Handling
 
-**Large Change**: Create PR, do not merge yourself
+### Self-Healing System
+
+The agent has built-in error recovery:
+
+- **CONTEXT_OVERFLOW**: Compress context and retry
+- **NETWORK_ERROR**: Exponential backoff and retry
+- **TIMEOUT**: Exponential backoff and retry
+- **TOOL_ERROR**: Retry with adjusted parameters
+- **UNRECOVERABLE**: Provide helpful fallback message
 
 ### Rollback
 
-Use `restore_from_backup(backup_dir)` if anything fails.
+If self-modification fails:
+```python
+# List available backups
+backups = list_backups()
+
+# Restore from backup
+restore_from_backup(".backup_20240101_120000")
+```
 
 ---
 
-## Best Practices
+## Progress Tracking
 
-### For Agents
+For multi-step tasks:
 
-1. Always read AGENTS.md at the start of complex tasks
-2. Use `find_relevant_skills` to discover domain expertise
-3. Use `route_task` to delegate to specialized subagents
-4. Use `create_todo` for multi-step tasks
-5. Always test code changes before committing
+```python
+# Create TODO list
+create_todo(["step 1", "step 2", "step 3"])
 
-### For Developers
+# Check progress
+todo = get_todo()
 
-1. Write tests for all new features
-2. Follow the self-modification protocol
-3. Keep commits small and atomic
-4. Use meaningful commit messages
-5. Update documentation when changing behavior
+# Mark step complete
+mark_todo_done(1)
+```
 
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Agent not responding**: Check provider configuration and API keys
-
-**Tests failing**: Run `pytest tests/test_cli.py -v` to isolate issue
-
-**Self-modification failed**: Use `restore_from_backup` to rollback
-
-**Subagent not routing correctly**: Check trigger patterns in YAML
-
-**Skills not loading**: Ensure skills are in correct directory structure
+Progress is visible to users in real-time, especially useful for:
+- Long-running tasks
+- Complex multi-step operations
+- Telegram bot interactions
 
 ---
 
-## Contributing
+## Memory System
 
-1. Fork the repository
-2. Create a feature branch
-3. Make changes and write tests
-4. Run full test suite
-5. Create a pull request
-6. Wait for review and merge
+### Hierarchy
+
+- **L0**: Quick abstract (one-line summary)
+- **L1**: Category overview (2-3 sentences)
+- **L2**: Full details (complete information)
+
+### Categories
+
+- **System**: Agent configuration and internals
+- **Environment**: Runtime environment details
+- **Skill**: Domain expertise and capabilities
+- **Project**: Project-specific information
+- **Comm**: Communication patterns and preferences
+- **Security**: API keys and sensitive data
+
+### Usage
+
+```python
+# Save to memory
+remember(
+    key="project_status",
+    category="Project",
+    abstract="Current development status",
+    overview="Feature X completed, Y in progress",
+    details="Full details here..."
+)
+
+# Recall from memory
+info = recall("project status", category="Project")
+```
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 0.4.5 | 2025-01-XX | Added code-simplifier subagent, mandatory after self-mod |
+| 0.4.4 | 2025-01-XX | Browser tool integration (8 tools), progress tracking |
+| 0.4.2 | 2025-01-XX | Self-healing enhancements, network/timeout handling |
+| 0.4.0 | 2025-01-XX | Deep research system, skills, subagents |
 
 ---
 

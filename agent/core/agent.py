@@ -108,6 +108,7 @@ Subagents:
 - Use route_task to automatically delegate to specialized subagents
 - Use delegate_task for explicit delegation
 - Subagents have isolated context and specialized capabilities
+- CODE-SIMPLIFIER: After self-modification, ALWAYS delegate to code-simplifier subagent
 
 =============================================================================
 SELF-MODIFICATION PROTOCOL (when asked to change YOURSELF)
@@ -143,16 +144,27 @@ PHASE 3B — LARGER CHANGE (multiple files, new feature): use PR, do not merge y
 - Do NOT run_gh("pr merge"). Ask the user to review and merge the PR.
 - After the user has merged: git_checkout("main"), git_pull("main"). If TG bot: request_restart().
 
+PHASE 4 — CODE SIMPLIFICATION (MANDATORY AFTER SELF-MODIFICATION):
+- **delegate_task("code-simplifier", "Review and simplify the recently modified code")**
+- The code-simplifier subagent will:
+  * Analyze recently modified code for clarity and maintainability
+  * Apply project standards from AGENTS.md
+  * Simplify complex code while preserving functionality
+  * Run tests to ensure nothing broke
+  * Provide a summary of improvements made
+- This step ensures code quality and consistency after self-modification
+
 ROLLBACK (if anything fails after you edited files):
 - Use restore_from_backup(backup_dir) with the backup dir you created (e.g. from list_backups()).
 - Then fix the code and re-run tests; do not push until everything passes.
 
 RULES:
 - Do not remove or weaken backup, list_backups, restore_from_backup, or this protocol.
-- Never skip backup_codebase(), run_tests(), or run_agent_subprocess()
+- Never skip backup_codebase(), run_tests(), run_agent_subprocess(), or code-simplifier
 - Never push or open a PR before tests and run_agent_subprocess succeed
 - Never merge a PR yourself unless the user explicitly asked you to
 - Prefer small, atomic changes; one logical change per run
+- ALWAYS run code-simplifier after successful self-modification
 
 =============================================================================
 
@@ -164,115 +176,173 @@ Session Management (OpenClaw-inspired):
 - Sessions are stored in SQLite with per-chat isolation
 - Memory uses L0/L1/L2 hierarchy for efficient retrieval
 - Use 'remember' to save important information across sessions
-- Use 'recall' to retrieve stored memories
-""".format(version=VERSION)
+- Use 'recall' to retrieve information when needed
+
+Self-Healing System:
+- Automatic error classification and recovery
+- Context compression when approaching token limits
+- Fallback responses for unrecoverable errors
+- Progress tracking from assistant messages
+
+Error Types:
+- CONTEXT_OVERFLOW: Compress context and retry
+- NETWORK_ERROR: Exponential backoff and retry
+- TIMEOUT: Exponential backoff and retry
+- TOOL_ERROR: Retry with adjusted parameters
+- UNRECOVERABLE: Provide helpful fallback message
+
+Progress Tracking:
+- Use create_todo for multi-step tasks
+- Mark steps complete with mark_todo_done
+- Progress visible to user in real-time
+- Helps with long-running tasks and transparency
+"""
 
 
-def build_vllm_model(
-    model_name: str | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
-) -> OpenAIChatModel:
-    """Build vLLM model instance (OpenAI-compatible local API).
+def create_agent(deps: AgentDeps) -> Agent[AgentDeps]:
+    """Create and configure the agent with tools and system prompt.
     
     Args:
-        model_name: Model identifier (e.g., 'openai/gpt-oss-120b')
-        base_url: vLLM API base URL (default: http://localhost:8000/v1)
-        api_key: API key (usually not needed for vLLM)
+        deps: Dependency injection container with all tools
         
     Returns:
-        Configured OpenAIChatModel instance for vLLM
-        
+        Configured Pydantic AI agent
     """
-    provider = OpenAIProvider(
-        base_url=base_url or VLLM_BASE_URL,
-        api_key=api_key or VLLM_API_KEY,
-    )
-    return OpenAIChatModel(
-        model_name=model_name or VLLM_MODEL_NAME,
-        provider=provider,
-    )
-
-
-def build_openrouter_model(
-    model_name: str | None = None,
-    api_key: str | None = None,
-) -> OpenRouterModel:
-    """Build OpenRouter model instance.
+    # Determine model based on provider
+    provider = deps.config.PROVIDER_DEFAULT or PROVIDER_DEFAULT
     
-    Args:
-        model_name: Model identifier (e.g., 'openai/gpt-oss-120b')
-        api_key: OpenRouter API key
-        
-    Returns:
-        Configured OpenRouterModel instance
-        
-    """
-    provider = OpenRouterProvider(
-        api_key=api_key or OPENROUTER_API_KEY,
-    )
-    return OpenRouterModel(
-        model_name=model_name or OPENROUTER_MODEL_NAME,
-        provider=provider,
-    )
-
-
-def build_session_agent(
-    provider: str | None = None,
-    model_name: str | None = None,
-) -> Agent[AgentDeps]:
-    """Build agent with session support.
+    if provider == "openrouter":
+        model = OpenRouterModel(
+            model_name=deps.config.OPENROUTER_MODEL_NAME or OPENROUTER_MODEL_NAME,
+            provider=OpenRouterProvider(api_key=deps.config.OPENROUTER_API_KEY or OPENROUTER_API_KEY),
+        )
+    else:  # vllm (default)
+        model = OpenAIChatModel(
+            model_name=deps.config.VLLM_MODEL_NAME or VLLM_MODEL_NAME,
+            provider=OpenAIProvider(
+                base_url=deps.config.VLLM_BASE_URL or VLLM_BASE_URL,
+                api_key=deps.config.VLLM_API_KEY or VLLM_API_KEY,
+            ),
+        )
     
-    Args:
-        provider: 'vllm' or 'openrouter' (default: from config)
-        model_name: Model name override
-        
-    Returns:
-        Configured Pydantic AI Agent instance
-        
-    """
-    prov = provider or PROVIDER_DEFAULT
-    
-    if prov == "openrouter":
-        model = build_openrouter_model(model_name=model_name)
-    else:
-        model = build_vllm_model(model_name=model_name)
-    
+    # Create agent with system prompt
     agent = Agent(
         model=model,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=SYSTEM_PROMPT.format(version=VERSION),
         deps_type=AgentDeps,
     )
     
-    logger.info("Agent built with provider=%s, model=%s", prov, model_name or "default")
-    return agent
-
-
-def build_simple_agent(
-    provider: str | None = None,
-    model_name: str | None = None,
-) -> Agent[None]:
-    """Build simple agent without session support.
-    
-    Args:
-        provider: 'vllm' or 'openrouter' (default: from config)
-        model_name: Model name override
-        
-    Returns:
-        Configured Pydantic AI Agent instance
-        
-    """
-    prov = provider or PROVIDER_DEFAULT
-    
-    if prov == "openrouter":
-        model = build_openrouter_model(model_name=model_name)
-    else:
-        model = build_vllm_model(model_name=model_name)
-    
-    agent = Agent(
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
+    # Register all tools
+    from agent.tools import (
+        # Shell & filesystem
+        run_shell,
+        read_file,
+        write_file,
+        list_dir,
+        # Web & browser
+        web_search,
+        browser_navigate,
+        browser_screenshot,
+        browser_get_text,
+        browser_click,
+        browser_fill,
+        browser_get_html,
+        browser_get_url,
+        browser_refresh,
+        # Deep research
+        deep_research,
+        quick_research,
+        compare_sources,
+        # TODO management
+        create_todo,
+        get_todo,
+        mark_todo_done,
+        # Backup & recovery
+        backup_codebase,
+        list_backups,
+        restore_from_backup,
+        # Testing
+        run_tests,
+        run_agent_subprocess,
+        # Git
+        git_status,
+        git_add,
+        git_commit,
+        git_push,
+        git_pull,
+        git_checkout,
+        # GitHub CLI
+        run_gh,
+        # Restart
+        request_restart,
+        # Memory
+        recall,
+        remember,
+        # AGENTS.md
+        read_agents_md,
+        get_agents_rules,
+        get_agents_context,
+        # Skills
+        list_skills,
+        get_skill,
+        find_relevant_skills,
+        create_skill,
+        # Subagents
+        list_subagents,
+        get_subagent,
+        delegate_task,
+        route_task,
+        create_subagent,
     )
     
-    logger.info("Simple agent built with provider=%s, model=%s", prov, model_name or "default")
+    # Register tools with the agent
+    agent.tool(run_shell)
+    agent.tool(read_file)
+    agent.tool(write_file)
+    agent.tool(list_dir)
+    agent.tool(web_search)
+    agent.tool(browser_navigate)
+    agent.tool(browser_screenshot)
+    agent.tool(browser_get_text)
+    agent.tool(browser_click)
+    agent.tool(browser_fill)
+    agent.tool(browser_get_html)
+    agent.tool(browser_get_url)
+    agent.tool(browser_refresh)
+    agent.tool(deep_research)
+    agent.tool(quick_research)
+    agent.tool(compare_sources)
+    agent.tool(create_todo)
+    agent.tool(get_todo)
+    agent.tool(mark_todo_done)
+    agent.tool(backup_codebase)
+    agent.tool(list_backups)
+    agent.tool(restore_from_backup)
+    agent.tool(run_tests)
+    agent.tool(run_agent_subprocess)
+    agent.tool(git_status)
+    agent.tool(git_add)
+    agent.tool(git_commit)
+    agent.tool(git_push)
+    agent.tool(git_pull)
+    agent.tool(git_checkout)
+    agent.tool(run_gh)
+    agent.tool(request_restart)
+    agent.tool(recall)
+    agent.tool(remember)
+    agent.tool(read_agents_md)
+    agent.tool(get_agents_rules)
+    agent.tool(get_agents_context)
+    agent.tool(list_skills)
+    agent.tool(get_skill)
+    agent.tool(find_relevant_skills)
+    agent.tool(create_skill)
+    agent.tool(list_subagents)
+    agent.tool(get_subagent)
+    agent.tool(delegate_task)
+    agent.tool(route_task)
+    agent.tool(create_subagent)
+    
+    logger.info(f"Agent created with {provider} provider, model: {model.model_name}")
+    
     return agent
