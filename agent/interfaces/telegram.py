@@ -17,15 +17,31 @@ from agent.activity_log import (
     log_task_end,
     get_activity_log_tail,
 )
-from agent.config import LOG_FILE, TG_BOT_KEY, TG_WHITELIST, setup_logging, VERSION, PROVIDER_DEFAULT
+from agent.config import (
+    LOG_FILE,
+    OPENROUTER_API_KEY,
+    TG_BOT_KEY,
+    TG_WHITELIST,
+    setup_logging,
+    VERSION,
+    PROVIDER_DEFAULT,
+)
 from agent.session_globals import close_db
 
 logger = logging.getLogger(__name__)
 
 _start_time = time.time()
 
+
+def _effective_provider() -> Literal["vllm", "openrouter"]:
+    """Use vLLM when OpenRouter is selected but API key is missing."""
+    if PROVIDER_DEFAULT == "openrouter" and not OPENROUTER_API_KEY:
+        return "vllm"
+    return PROVIDER_DEFAULT  # type: ignore[return-value]
+
+
 # Current provider for bot sessions (can be changed via /provider command)
-_current_provider: Literal["vllm", "openrouter"] = PROVIDER_DEFAULT
+_current_provider: Literal["vllm", "openrouter"] = _effective_provider()
 
 # Grouped for menu: main, tasks, session, logs, emergency
 BOT_COMMANDS = [
@@ -161,7 +177,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("Unauthorized /start from user: %s (id=%s)", username, user.id if user else "?")
         return
     
-    provider_info = f"\n📡 Provider: *{_current_provider}*" if _current_provider != PROVIDER_DEFAULT else ""
+    provider_info = f"\n📡 Provider: *{_current_provider}*" if _current_provider != _effective_provider() else ""
     await update.message.reply_text(
         f"🤖 Shket Research Agent online.\nSend me a task or type /help for commands.{provider_info}",
         parse_mode="Markdown"
@@ -237,7 +253,7 @@ async def provider_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     
     new_provider = args[0].lower()
-    
+
     if new_provider not in ("vllm", "openrouter"):
         await update.message.reply_text(
             "❌ Invalid provider. Use:\n"
@@ -246,7 +262,14 @@ async def provider_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="Markdown"
         )
         return
-    
+
+    if new_provider == "openrouter" and not OPENROUTER_API_KEY:
+        await update.message.reply_text(
+            "❌ OpenRouter requires OPENROUTER_API_KEY. Set it and restart the bot, or use /provider vllm.",
+            parse_mode="Markdown"
+        )
+        return
+
     old_provider = _current_provider
     _current_provider = new_provider
     

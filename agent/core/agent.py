@@ -185,7 +185,10 @@ def build_model(
         
     """
     provider = provider or PROVIDER_DEFAULT
-    
+    if provider == "openrouter" and not (api_key or OPENROUTER_API_KEY):
+        logger.warning("OpenRouter requested but OPENROUTER_API_KEY is not set; using vLLM")
+        provider = "vllm"
+
     if provider == "openrouter":
         logger.info(f"Using OpenRouter provider with model: {model_name or OPENROUTER_MODEL_NAME}")
         return build_openrouter_model(model_name, api_key)
