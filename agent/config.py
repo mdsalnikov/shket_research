@@ -19,7 +19,7 @@ PROVIDER_DEFAULT = os.getenv("PROVIDER_DEFAULT", "vllm")
 
 # vLLM (local) configuration
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
-VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "openai/gpt-oss-120b")
+VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen3.5-122B-A10B-FP8")
 # vLLM typically doesn't need an API key, but allow one for auth setups
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "not-needed")
 
