@@ -129,6 +129,79 @@ async def _show_context() -> None:
         await close_db()
 
 
+async def _resume_task() -> None:
+    """Load one incomplete resumable task, run resume, print result (no Telegram)."""
+    from agent.config import PROVIDER_DEFAULT
+    from agent.core.runner import run_task_with_session
+    from agent.interfaces.telegram import _build_resume_prompt, MAX_RESUME_COUNT
+    try:
+        db = await get_db()
+        incomplete = await db.get_incomplete_resumable_tasks()
+        if not incomplete:
+            print("No incomplete resumable tasks.")
+            await close_db()
+            return
+        row = incomplete[0]
+        if row["resume_count"] >= MAX_RESUME_COUNT:
+            await db.mark_resumable_task_failed(row["id"], "Max resume count exceeded")
+            print(f"Task {row['id']} exceeded max resume count; marked failed.")
+            await close_db()
+            return
+        await db.increment_resume_and_set_resumed_at(row["id"])
+        prompt = _build_resume_prompt(row["goal"], row["resume_count"] + 1)
+        print(f"Resuming task {row['id']} (chat_id={row['chat_id']}): {row['goal'][:60]}...")
+        try:
+            result = await run_task_with_session(
+                prompt,
+                chat_id=row["chat_id"],
+                provider=PROVIDER_DEFAULT,
+                resumable_task_id=None,
+            )
+            await db.mark_resumable_task_completed(row["id"])
+            print(result)
+        except Exception as e:
+            await db.mark_resumable_task_failed(row["id"], str(e))
+            print(f"Resume failed: {e}")
+    finally:
+        await close_db()
+
+
+async def _long_list(chat_id: int | None = None, limit: int = 20) -> None:
+    """Print resumable tasks (optionally for one chat_id)."""
+    try:
+        db = await get_db()
+        tasks = await db.get_resumable_tasks(chat_id=chat_id, limit=limit)
+        if not tasks:
+            print("No resumable tasks.")
+            await close_db()
+            return
+        print("ID   STATUS      CHAT_ID  RESUME  GOAL (preview)")
+        print("-" * 60)
+        for t in tasks:
+            goal = (t["goal"] or "")[:40] + ("…" if len(t["goal"] or "") > 40 else "")
+            print(f"{t['id']:<5} {t['status']:<11} {t['chat_id']:<8} {t.get('resume_count', 0)}      {goal}")
+    finally:
+        await close_db()
+
+
+async def _long_show(task_id: int) -> None:
+    """Print one resumable task by id."""
+    try:
+        db = await get_db()
+        t = await db.get_resumable_task_by_id(task_id)
+        if not t:
+            print(f"Task {task_id} not found.")
+            await close_db()
+            return
+        print(f"ID: {t['id']}  status: {t['status']}  chat_id: {t['chat_id']}  resume_count: {t.get('resume_count', 0)}")
+        print(f"created_at: {t.get('created_at')}  updated_at: {t.get('updated_at')}")
+        if t.get("last_error"):
+            print(f"last_error: {t['last_error']}")
+        print(f"goal:\n{t['goal']}")
+    finally:
+        await close_db()
+
+
 def _show_logs(n: int) -> None:
     try:
         with open(LOG_FILE) as f:
@@ -161,8 +234,24 @@ def main():
     sub.add_parser("status", help="Показать статус агента")
     sub.add_parser("version", help="Показать версию агента")
     sub.add_parser("memory", help="Показать сводку памяти")
-    sub.add_parser("context", help="Показать информацию о контексте сессии")
-    sub.add_parser("clear-context", help="Очистить контекст сессии (удалить сообщения)")
+
+    long_p = sub.add_parser("long", help="Long (resumable) задачи: list, resume, show")
+    long_sub = long_p.add_subparsers(dest="long_subcommand")
+    long_sub.add_parser("list", help="Список resumable задач (все или по chat_id)")
+    long_sub.add_parser("resume", help="Возобновить одну незавершённую задачу")
+    show_p = long_sub.add_parser("show", help="Показать задачу по id")
+    show_p.add_argument("id", type=int, help="ID задачи")
+    long_p.add_argument("--chat-id", type=int, default=None, help="Только для этого чата (для list)")
+    long_p.add_argument("--limit", type=int, default=20, help="Макс. записей для list (по умолчанию 20)")
+
+    session_p = sub.add_parser("session", help="Сессия: context, clear")
+    session_sub = session_p.add_subparsers(dest="session_subcommand")
+    session_sub.add_parser("context", help="Информация о контексте сессии")
+    session_sub.add_parser("clear", help="Очистить контекст сессии")
+
+    sub.add_parser("context", help="(то же что session context)")
+    sub.add_parser("clear-context", help="(то же что session clear)")
+    sub.add_parser("resume", help="(то же что long resume)")
 
     logs_p = sub.add_parser("logs", help="Показать последние записи лога")
     logs_p.add_argument("n", nargs="?", type=int, default=30, help="Количество строк (по умолчанию 30)")
@@ -183,10 +272,30 @@ def main():
         print(f"Shket Research Agent v{VERSION}")
     elif args.command == "memory":
         asyncio.run(_show_memory_summary())
+    elif args.command == "long":
+        subc = getattr(args, "long_subcommand", None)
+        if subc == "list":
+            asyncio.run(_long_list(chat_id=getattr(args, "chat_id", None), limit=getattr(args, "limit", 20)))
+        elif subc == "resume":
+            asyncio.run(_resume_task())
+        elif subc == "show":
+            asyncio.run(_long_show(getattr(args, "id", 0)))
+        else:
+            long_p.print_help()
+    elif args.command == "session":
+        subc = getattr(args, "session_subcommand", None)
+        if subc == "context":
+            asyncio.run(_show_context())
+        elif subc == "clear":
+            asyncio.run(_clear_context())
+        else:
+            session_p.print_help()
     elif args.command == "context":
         asyncio.run(_show_context())
     elif args.command == "clear-context":
         asyncio.run(_clear_context())
+    elif args.command == "resume":
+        asyncio.run(_resume_task())
     elif args.command == "bot":
         from agent.interfaces.telegram import run_bot
         run_bot()
